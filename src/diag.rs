@@ -30,6 +30,14 @@ pub const USER_AGENT: &str = concat!("Duoray/", env!("CARGO_PKG_VERSION"), " (mo
 /// The hub that answered last; tried first next time.
 static PREFERRED: AtomicUsize = AtomicUsize::new(0);
 
+/// The tunnel's SOCKS while connected: reports go through it first, as the
+/// hub may be what the network refuses (os error 111 on mobile whitelists).
+static PROXY: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn set_proxy(proxy: Option<String>) {
+    *PROXY.lock().unwrap_or_else(|e| e.into_inner()) = proxy;
+}
+
 /// Hubs in the order to try them. `DUORAY_HUB_URL` replaces the list (tests).
 pub fn hubs() -> Vec<String> {
     if let Ok(url) = std::env::var("DUORAY_HUB_URL") {
@@ -258,26 +266,38 @@ impl From<PostError> for anyhow::Error {
     }
 }
 
-/// Sends to the first hub that takes it; a refusal (bad report) is final.
+/// Sends to the first hub that takes it, through the tunnel first while
+/// connected; a refusal (bad report) is final. The error kept is the first:
+/// the mirrors failing after it say less about why.
 fn post(report: &Value) -> Result<String, PostError> {
-    let mut last = PostError::Later(anyhow::anyhow!("нет серверов"));
-    for hub in hubs() {
-        match post_to(&hub, report) {
-            Ok(id) => {
-                hub_ok(&hub);
-                return Ok(id);
+    let proxy = PROXY.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let routes = match proxy {
+        Some(p) => vec![Some(p), None],
+        None => vec![None],
+    };
+    let mut first: Option<PostError> = None;
+    for route in &routes {
+        for hub in hubs() {
+            match post_to(&hub, report, route.as_deref()) {
+                Ok(id) => {
+                    hub_ok(&hub);
+                    return Ok(id);
+                }
+                Err(PostError::Rejected) => return Err(PostError::Rejected),
+                Err(e) => {
+                    first.get_or_insert(e);
+                }
             }
-            Err(PostError::Rejected) => return Err(PostError::Rejected),
-            Err(e) => last = e,
         }
     }
-    Err(last)
+    Err(first.unwrap_or_else(|| PostError::Later(anyhow::anyhow!("нет серверов"))))
 }
 
-fn post_to(hub: &str, report: &Value) -> Result<String, PostError> {
+fn post_to(hub: &str, report: &Value, proxy: Option<&str>) -> Result<String, PostError> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(20)))
         .http_status_as_error(false)
+        .proxy(proxy.and_then(|p| ureq::Proxy::new(p).ok()))
         .build()
         .into();
     let mut resp = agent
@@ -450,15 +470,15 @@ mod tests {
     fn reports_reach_the_hub_and_come_back_with_a_code() {
         let (hub, request) = crate::testing::fake_hub("201 Created", r#"{"id":"DR-TEST01"}"#);
         let report = json!({"kind": "user_report", "note": "не подключается"});
-        assert_eq!(post_to(&hub, &report).ok().as_deref(), Some("DR-TEST01"));
+        assert_eq!(post_to(&hub, &report, None).ok().as_deref(), Some("DR-TEST01"));
         let (head, body) = request.join().unwrap();
         assert!(head.starts_with("POST /v1/report "), "{head}");
         assert!(head.contains(USER_AGENT), "{head}");
         assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), report);
 
         let (hub, _) = crate::testing::fake_hub("400 Bad Request", "{}");
-        assert!(matches!(post_to(&hub, &report), Err(PostError::Rejected)));
+        assert!(matches!(post_to(&hub, &report, None), Err(PostError::Rejected)));
         let (hub, _) = crate::testing::fake_hub("429 Too Many Requests", "{}");
-        assert!(matches!(post_to(&hub, &report), Err(PostError::Later(_))));
+        assert!(matches!(post_to(&hub, &report, None), Err(PostError::Later(_))));
     }
 }

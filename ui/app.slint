@@ -412,16 +412,10 @@ component PingChip inherits Rectangle {
         padding-left: 8px;
         padding-right: 8px;
         alignment: center;
-        if root.level == 5: VerticalLayout {
-            alignment: center;
-            Spinner {
-                indeterminate: true;
-                width: 14px;
-                height: 14px;
-            }
-        }
-        if root.level != 5: Text {
-            text: root.text;
+        // Being measured: three dots, still. A spinner would keep the window
+        // redrawing at full rate for the whole check.
+        Text {
+            text: root.level == 5 ? "···" : root.text;
             font-size: Theme.fs-caption;
             font-weight: 700;
             color: root.tone;
@@ -919,10 +913,10 @@ component HeaderCard inherits Card {
             }
             VerticalLayout {
                 alignment: center;
+                // While a check runs it stops it.
                 IconButton {
-                    icon: Icons.speed;
-                    label: "Проверить задержку";
-                    enabled: !AppState.pinging;
+                    icon: AppState.pinging ? Icons.close : Icons.speed;
+                    label: AppState.pinging ? "Остановить проверку" : "Проверить задержку";
                     clicked => {
                         Actions.ping-all();
                     }
@@ -1361,7 +1355,7 @@ component RoutingPage inherits Rectangle {
                         spacing: 14px;
                         ToggleRow {
                             title: "Российские сайты";
-                            hint: "Все российские IP-адреса и сайты .ru, .рф, .su: Госуслуги, банки, маркетплейсы, видео. Они видят вас как обычно и работают быстрее.";
+                            hint: "Все российские IP-адреса и сайты .ru, .рф, .su: Госуслуги, банки, маркетплейсы, видео. Они видят вас как обычно и работают быстрее. На мобильном интернете с белыми списками операторов сайты не из списка напрямую не откроются: там включайте «Белый список».";
                             checked: AppState.ru-direct;
                             toggled(on) => {
                                 Actions.set-direct(0, on);

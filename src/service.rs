@@ -23,7 +23,7 @@ use duoray_core::runtime;
 use duoray_core::store::Store;
 use serde_json::{Value, json};
 
-use crate::netpolicy::{NetworkEnv, NetworkPolicy};
+use crate::netpolicy::{NetKind, NetworkEnv, NetworkPolicy};
 use crate::platform::Platform;
 use crate::servers;
 use crate::settings::{AppRules, MobileSettings};
@@ -170,6 +170,10 @@ struct Service {
     /// A server picked by hand on this network: it beats the network rule
     /// until the network changes, as in MaterialXray.
     manual: Option<String>,
+    /// The attempt whose xray was started again after dying at once.
+    retried: u64,
+    /// The last network that was not "offline": what a rule switch compares with.
+    online: NetworkEnv,
     /// Bumped by every connect and disconnect: late results of an older
     /// attempt are dropped.
     attempt: u64,
@@ -242,6 +246,7 @@ pub fn init(host: Host) {
         let paths = host.paths();
         let _ = std::fs::create_dir_all(host.run_dir());
         tunnel::kill_orphan(&paths.pid);
+        tunnel::kill_orphan_pings(&host.run_dir());
         let settings = MobileSettings::load(&host.settings());
         crate::status::set_background_stats(settings.background_stats);
         crate::status::set_live_update(settings.live_update);
@@ -490,10 +495,32 @@ fn on_xray_exit(attempt: u64, exit: tunnel::Exit) {
             return;
         }
         s.xray = None;
+        // Dead at start (a port the xray before it had not let go of yet,
+        // after Android restarted the app): one more try.
+        if exit.ran_for < Duration::from_secs(3) && s.retried != attempt && s.tun.is_some() {
+            s.retried = attempt;
+            log::warn!("xray stopped at start, starting it again");
+            crate::diag::log("xray stopped at start, retrying");
+            drop(s);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1500));
+                launch(attempt);
+            });
+            return;
+        }
         let mut message = format!("xray остановился через {} с", exit.ran_for.as_secs());
-        if !exit.log_tail.is_empty() {
-            message.push_str(":\n");
-            message.push_str(&exit.log_tail);
+        // The line that says why, not xray's banner.
+        let reason = exit.log_tail.lines().rev().find(|l| l.contains("Failed to start") || l.contains("[Error]"));
+        match reason {
+            Some(line) => {
+                message.push_str(": ");
+                message.push_str(line.split_once("Failed to start: ").map_or(line, |(_, r)| r).trim());
+            }
+            None if !exit.log_tail.is_empty() => {
+                message.push_str(":\n");
+                message.push_str(&exit.log_tail);
+            }
+            None => {}
         }
         s.fail("tunnel_stopped", message)
     };
@@ -508,15 +535,24 @@ pub fn on_tun_up(fd: RawFd) -> bool {
     let attempt = {
         let mut s = lock();
         let Some(host) = s.host.clone() else { return false };
-        if fd >= 0 && !host.paths().config.exists() {
-            // Always-on VPN before any connection was made here: the last
-            // chosen server, if there is one.
-            let last = Store::load(&host.store()).ok().and_then(|st| st.settings.last_server);
-            match last.map(|key| (write_config(&host, &key), key)) {
+        if fd >= 0 && s.link.is_none() {
+            // Started by the system with nothing connected in this process:
+            // always-on VPN, or Android restarting the app (a permission
+            // changed). A fresh config for the server it was on (or the
+            // network's, or the last chosen), so the link — stats, exit
+            // country — is known again.
+            let key = s
+                .server
+                .clone()
+                .or_else(|| s.target().map(String::from))
+                .or_else(|| Store::load(&host.store()).ok().and_then(|st| st.settings.last_server));
+            match key.map(|key| (write_config(&host, &key), key)) {
                 Some((Ok(link), key)) => {
                     s.link = Some(link);
                     s.server = Some(key);
                 }
+                // The config of the last run, if there is one.
+                _ if host.paths().config.exists() => {}
                 _ => return false,
             }
         }
@@ -579,10 +615,22 @@ pub fn on_network(net: NetworkEnv) {
         log::info!("network: {}", net.describe());
         // The kind only: a Wi-Fi name says where the user is.
         crate::diag::log(format!("network: {:?}", net.kind));
-        s.net = net;
+        let blip = net.kind == NetKind::Offline;
+        let same = net.kind == s.online.kind && (net.ssid.is_none() || net.ssid == s.online.ssid);
+        s.net = net.clone();
+        s.notify();
+        // A moment offline (switching networks, a VPN coming up) changes
+        // nothing; nor does the same Wi-Fi coming back, with or without its
+        // name (Android hides it in some reports).
+        if blip || same {
+            if !blip && net.ssid.is_some() {
+                s.online = net;
+            }
+            return;
+        }
+        s.online = net;
         // A new network: its rule counts again.
         s.manual = None;
-        s.notify();
         s.wanted_switch()
     };
     if let Some(key) = switch {

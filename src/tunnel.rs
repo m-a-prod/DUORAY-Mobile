@@ -87,6 +87,7 @@ pub fn spawn(paths: &Paths, tun_fd: RawFd, on_exit: impl FnOnce(Exit) + Send + '
     if !paths.xray.exists() {
         bail!("нет xray: {}", paths.xray.display());
     }
+    remove_stale_sockets(&paths.config);
     // A duplicate above stdio for the child; close-on-exec until the child
     // clears it, so other processes started meanwhile do not inherit it.
     // SAFETY: fcntl on a descriptor the platform keeps open while we run.
@@ -168,23 +169,126 @@ pub fn xray_command(bundled: &Path) -> Command {
     }
 }
 
-pub fn spawn_plain(xray: &Path, assets: &Path, config: &Path) -> Result<Child> {
+/// A throwaway xray (a ping). Started with posix_spawn where Android has it
+/// (9+): a fork of this process copies hundreds of megabytes of mappings,
+/// and pinging 78 servers that way made the window stutter.
+pub fn spawn_plain(xray: &Path, assets: &Path, config: &Path) -> Result<Plain> {
     let mut cmd = xray_command(xray);
-    cmd.args(["run", "-c"])
-        .arg(config)
-        .env("XRAY_LOCATION_ASSET", assets)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args(["run", "-c"]).arg(config).env("XRAY_LOCATION_ASSET", assets);
+    #[cfg(target_os = "android")]
+    if let Some(pid) = light::spawn(&cmd)? {
+        return Ok(Plain::Light(pid));
+    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     // SAFETY: only an async-signal-safe call between fork and exec.
     unsafe {
         cmd.pre_exec(|| {
             #[cfg(any(target_os = "android", target_os = "linux"))]
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            libc::setpriority(libc::PRIO_PROCESS, 0, 10);
             Ok(())
         });
     }
-    spawner::spawn(cmd).context("запуск xray")
+    Ok(Plain::Child(spawner::spawn(cmd).context("запуск xray")?))
+}
+
+/// A throwaway xray, however it was started.
+pub enum Plain {
+    Child(Child),
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    Light(libc::pid_t),
+}
+
+impl Plain {
+    /// Its exit status, if it has exited.
+    pub fn try_wait(&mut self) -> Result<Option<i32>> {
+        match self {
+            Plain::Child(c) => Ok(c.try_wait()?.map(|s| s.code().unwrap_or(-1))),
+            Plain::Light(pid) => {
+                let mut status = 0;
+                // SAFETY: our own child, not yet reaped.
+                let r = unsafe { libc::waitpid(*pid, &mut status, libc::WNOHANG) };
+                Ok((r == *pid).then_some(status))
+            }
+        }
+    }
+
+    pub fn kill(&mut self) {
+        match self {
+            Plain::Child(c) => {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            Plain::Light(pid) => {
+                // SAFETY: our own child; reaped right after.
+                unsafe {
+                    libc::kill(*pid, libc::SIGKILL);
+                    libc::waitpid(*pid, std::ptr::null_mut(), 0);
+                }
+            }
+        }
+    }
+}
+
+/// posix_spawn, looked up at run time: the NDK's API 26 libc has no symbol
+/// for it, the phone's libc has it from Android 9.
+#[cfg(target_os = "android")]
+mod light {
+    use std::ffi::{CString, c_char, c_int, c_void};
+    use std::os::unix::ffi::OsStrExt;
+    use std::process::Command;
+
+    type PosixSpawn = unsafe extern "C" fn(
+        *mut libc::pid_t,
+        *const c_char,
+        *const c_void,
+        *const c_void,
+        *const *mut c_char,
+        *const *mut c_char,
+    ) -> c_int;
+
+    fn posix_spawn() -> Option<PosixSpawn> {
+        // SAFETY: dlsym with a NUL-terminated name; a non-null result is the
+        // libc function with the declared C signature.
+        let f = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"posix_spawn".as_ptr()) };
+        // SAFETY: as above.
+        (!f.is_null()).then(|| unsafe { std::mem::transmute::<*mut c_void, PosixSpawn>(f) })
+    }
+
+    /// `Ok(None)`: no posix_spawn here, the caller forks instead.
+    pub fn spawn(cmd: &Command) -> anyhow::Result<Option<libc::pid_t>> {
+        let Some(spawn) = posix_spawn() else { return Ok(None) };
+        let cstr = |b: &[u8]| CString::new(b).map_err(|_| anyhow::anyhow!("NUL в аргументе"));
+        let program = cstr(cmd.get_program().as_bytes())?;
+        let mut args = vec![program.clone()];
+        for a in cmd.get_args() {
+            args.push(cstr(a.as_bytes())?);
+        }
+        let mut env: Vec<CString> = Vec::new();
+        let overrides: Vec<_> = cmd.get_envs().collect();
+        for (k, v) in std::env::vars_os() {
+            if !overrides.iter().any(|(ok, _)| *ok == k) {
+                env.push(cstr(&[k.as_bytes(), b"=", v.as_bytes()].concat())?);
+            }
+        }
+        for (k, v) in overrides {
+            if let Some(v) = v {
+                env.push(cstr(&[k.as_bytes(), b"=", v.as_bytes()].concat())?);
+            }
+        }
+        let mut argv: Vec<*mut c_char> = args.iter().map(|a| a.as_ptr() as *mut c_char).collect();
+        argv.push(std::ptr::null_mut());
+        let mut envp: Vec<*mut c_char> = env.iter().map(|e| e.as_ptr() as *mut c_char).collect();
+        envp.push(std::ptr::null_mut());
+        let mut pid: libc::pid_t = 0;
+        // SAFETY: argv and envp are NUL-terminated arrays of C strings that
+        // outlive the call; no file actions or attributes.
+        let r = unsafe { spawn(&mut pid, program.as_ptr(), std::ptr::null(), std::ptr::null(), argv.as_ptr(), envp.as_ptr()) };
+        if r != 0 {
+            anyhow::bail!("запуск xray: {}", std::io::Error::from_raw_os_error(r));
+        }
+        Ok(Some(pid))
+    }
 }
 
 /// `xray api <args>` against a running xray's API; its standard output.
@@ -202,12 +306,53 @@ pub fn kill_orphan(pid_file: &Path) {
     let Some(pid) = std::fs::read_to_string(pid_file).ok().and_then(|s| s.trim().parse::<libc::pid_t>().ok()) else {
         return;
     };
-    let ours = std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|c| String::from_utf8_lossy(&c).contains("libxray"));
+    // Ours: the bundled libxray.so, or a downloaded core run through the
+    // linker, both on the config in our run directory.
+    let cmdline = |pid: libc::pid_t| std::fs::read(format!("/proc/{pid}/cmdline")).ok().map(|c| String::from_utf8_lossy(&c).into_owned());
+    let ours = cmdline(pid).is_some_and(|c| c.contains("xray") && c.contains("xray.json"));
     if ours {
-        // SAFETY: a process running our xray binary, checked just above.
+        // SAFETY: a process running our xray on our config, checked just above.
         unsafe { libc::kill(pid, libc::SIGKILL) };
+        // The new xray takes the same ports (the hotspot proxy's are fixed):
+        // wait until the old one has let go of them.
+        for _ in 0..40 {
+            if cmdline(pid).is_none_or(|c| !c.contains("xray.json")) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
     let _ = std::fs::remove_file(pid_file);
+}
+
+/// Ping xrays of a run of this app that died mid-check (they are started
+/// without a death signal, see spawn_plain): found by their config in our
+/// run directory.
+pub fn kill_orphan_pings(run_dir: &Path) {
+    let marker = run_dir.join("ping-");
+    let marker = marker.to_string_lossy();
+    let Ok(entries) = std::fs::read_dir("/proc") else { return };
+    for e in entries.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<libc::pid_t>().ok()) else { continue };
+        let Ok(cmdline) = std::fs::read(e.path().join("cmdline")) else { continue };
+        if String::from_utf8_lossy(&cmdline).contains(marker.as_ref()) {
+            // SAFETY: a process running xray on one of our ping configs.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
+/// Socket files the config listens on (the API), left behind by an xray that
+/// was killed (Android killing the app): binding them again fails with
+/// "address already in use". Called with no xray of ours running.
+fn remove_stale_sockets(config: &Path) {
+    let Some(json) = std::fs::read(config).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) else { return };
+    for inbound in json["inbounds"].as_array().into_iter().flatten() {
+        if let Some(path) = inbound["listen"].as_str().filter(|l| l.starts_with('/')) {
+            let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(format!("{path}.lock"));
+        }
+    }
 }
 
 /// The last `lines` lines of xray's log.
@@ -254,6 +399,22 @@ mod spawner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_api_sockets_go_before_xray_starts() {
+        let dir = std::env::temp_dir().join(format!("duoray-sockets-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("api-1.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        std::fs::write(dir.join("api-1.sock.lock"), "").unwrap();
+        let config = dir.join("xray.json");
+        let json = serde_json::json!({ "inbounds": [{ "listen": sock }, { "listen": "127.0.0.1", "port": 1 }] });
+        std::fs::write(&config, json.to_string()).unwrap();
+        remove_stale_sockets(&config);
+        assert!(!sock.exists() && !dir.join("api-1.sock.lock").exists());
+        assert!(config.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn tail_skips_blank_lines() {

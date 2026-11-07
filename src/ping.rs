@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,7 @@ use anyhow::{Context, Result, bail};
 use duoray_core::runtime;
 use duoray_core::server::Server;
 use duoray_core::store::{PingMode, PingSettings, ProxyPingMode};
+use serde_json::Value;
 
 use crate::service::{self, Host};
 use crate::tunnel;
@@ -25,20 +26,29 @@ pub fn run_all(
     jobs: Vec<(String, Server)>,
     settings: PingSettings,
     host: Arc<Host>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    on_start: impl Fn(String) + Send + Sync + 'static,
     on_result: impl Fn(String, Result<Duration, String>) + Send + Sync + 'static,
     on_done: impl FnOnce() + Send + 'static,
 ) {
     let threads = settings.threads.clamp(1, 32) as usize;
     let queue = Arc::new(Mutex::new(VecDeque::from(jobs)));
     let on_result = Arc::new(on_result);
+    let on_start = Arc::new(on_start);
     let settings = Arc::new(settings);
     std::thread::spawn(move || {
         let workers: Vec<_> = (0..threads)
             .map(|n| {
-                let (queue, on_result, settings, host) = (queue.clone(), on_result.clone(), settings.clone(), host.clone());
+                let (queue, on_start, on_result, settings, host, cancel) =
+                    (queue.clone(), on_start.clone(), on_result.clone(), settings.clone(), host.clone(), cancel.clone());
                 std::thread::spawn(move || {
                     loop {
+                        // Stopped: the servers under way finish, no new ones start.
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            return;
+                        }
                         let Some((key, server)) = queue.lock().ok().and_then(|mut q| q.pop_front()) else { return };
+                        on_start(key.clone());
                         let result = ping(&server, &settings, &host, n).map_err(|e| format!("{e:#}"));
                         on_result(key, result);
                     }
@@ -102,6 +112,7 @@ pub fn through_server<T>(server: &Server, host: &Host, name: &str, job: impl FnO
     let rt = runtime::build(server, "", None)?;
     let mut config = rt.config;
     service::strip_interface(&mut config);
+    strip_geo(&mut config);
     let dir = host.run_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.json"));
@@ -111,17 +122,31 @@ pub fn through_server<T>(server: &Server, host: &Host, name: &str, job: impl FnO
         wait_listening(rt.socks, &mut child, Duration::from_secs(5))?;
         job(rt.socks, &rt.user, &rt.pass)
     })();
-    let _ = child.kill();
-    let _ = child.wait();
+    child.kill();
     let _ = std::fs::remove_file(&path);
     result
 }
 
-fn wait_listening(addr: SocketAddr, child: &mut Child, timeout: Duration) -> Result<()> {
+/// What a ping does not need and xray pays for at every start: rules and
+/// DNS that name geoip/geosite make it read those files (megabytes) once
+/// per server checked. The check goes through the proxy anyway.
+fn strip_geo(config: &mut Value) {
+    fn geo(v: &Value) -> bool {
+        v.as_array().is_some_and(|l| l.iter().any(|x| x.as_str().is_some_and(|x| x.starts_with("geosite:") || x.starts_with("geoip:") || x.starts_with("ext:"))))
+    }
+    if let Some(rules) = config["routing"]["rules"].as_array_mut() {
+        rules.retain(|r| !(geo(&r["domain"]) || geo(&r["ip"]) || geo(&r["source"])));
+    }
+    if let Some(obj) = config.as_object_mut() {
+        obj.remove("dns");
+    }
+}
+
+fn wait_listening(addr: SocketAddr, child: &mut tunnel::Plain, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if let Some(status) = child.try_wait()? {
-            bail!("xray завершился при старте ({status})");
+            bail!("xray завершился при старте (код {status})");
         }
         if TcpStream::connect_timeout(&addr, Duration::from_millis(50)).is_ok() {
             return Ok(());
@@ -213,5 +238,28 @@ mod tests {
         assert_eq!(label(&Ok(Duration::from_millis(53))), ("53 мс".into(), 1));
         assert_eq!(label(&Ok(Duration::from_millis(200))).1, 2);
         assert_eq!(label(&Err("x".into())), ("—".into(), 4));
+    }
+}
+
+#[cfg(test)]
+mod geo_tests {
+    use super::*;
+
+    #[test]
+    fn pings_skip_geo_rules_and_dns() {
+        let mut c = serde_json::json!({
+            "dns": { "servers": ["1.1.1.1"] },
+            "routing": { "rules": [
+                { "ip": ["geoip:private"], "outboundTag": "direct" },
+                { "domain": ["geosite:category-ads"], "outboundTag": "block" },
+                { "inboundTag": ["socks"], "balancerTag": "b" },
+                { "ip": ["10.0.0.0/8"], "outboundTag": "direct" }
+            ] }
+        });
+        strip_geo(&mut c);
+        assert!(c.get("dns").is_none());
+        let rules = c["routing"]["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0]["balancerTag"], "b");
     }
 }

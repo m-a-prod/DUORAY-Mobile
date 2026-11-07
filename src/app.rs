@@ -49,6 +49,10 @@ struct App {
     /// Servers "Держать подключение" already moved away from.
     failover_tried: HashSet<String>,
     ticks: u32,
+    /// Stops the running ping check.
+    ping_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// A list redraw is scheduled (render_servers_soon).
+    render_pending: bool,
     /// The server open in the editor: (subscription id, server index).
     editing: Option<(String, usize)>,
     refreshing: HashSet<String>,
@@ -155,6 +159,8 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         failover_tried: HashSet::new(),
         ticks: 0,
         editing: None,
+        ping_cancel: None,
+        render_pending: false,
         refreshing: HashSet::new(),
         conn: service::snapshot(),
         traffic: None,
@@ -321,8 +327,8 @@ fn wire(ui: &AppWindow) {
     });
     a.on_set_ping_threads(|v| {
         with_app(|app| {
-            app.store.settings.ping.threads = v.clamp(1, 32) as u32;
-            app.save_store();
+            app.settings.wifi_ping_threads = v.clamp(1, 16) as u32;
+            app.save_settings();
             app.render_settings();
         })
     });
@@ -487,7 +493,7 @@ fn wire(ui: &AppWindow) {
     });
     a.on_set_keep_connected(|on| {
         with_app(|app| {
-            app.store.settings.keep_connected = on;
+            app.settings.keep_connected = on;
             app.save_store();
         })
     });
@@ -890,7 +896,7 @@ impl App {
             PingMode::Tcp => 2,
             PingMode::Icmp => 3,
         });
-        st.set_ping_threads(p.threads as i32);
+        st.set_ping_threads(self.settings.wifi_ping_threads as i32);
         st.set_mobile_ping_threads(self.settings.mobile_ping_threads as i32);
         st.set_background_stats(self.settings.background_stats);
         st.set_live_update(self.settings.live_update);
@@ -920,7 +926,7 @@ impl App {
         st.set_happ_hwid(happ.hwid.clone().into());
         st.set_happ_os(HAPP_OS.iter().position(|o| *o == happ.os).unwrap_or(0) as i32);
         st.set_autoconnect(self.store.settings.autoconnect);
-        st.set_keep_connected(self.store.settings.keep_connected);
+        st.set_keep_connected(self.settings.keep_connected);
         st.set_telemetry(self.store.settings.telemetry == Some(true));
         st.set_auto_update(self.store.settings.auto_update);
     }
@@ -959,6 +965,9 @@ impl App {
     fn on_connection(&mut self, snapshot: Snapshot) {
         let new_link = snapshot.link != self.conn.link;
         let server_changed = snapshot.server != self.conn.server;
+        if new_link {
+            crate::diag::set_proxy(snapshot.link.as_ref().map(service::Link::proxy_url));
+        }
         self.conn = snapshot;
         if new_link || server_changed {
             self.traffic = None;
@@ -1052,7 +1061,7 @@ impl App {
                 app.render_connection();
                 // Pings go every 5 s: the setting in seconds, in misses.
                 let allowed = app.settings.failover_secs.div_ceil(5).max(1);
-                if app.live_failures >= allowed && app.store.settings.keep_connected {
+                if app.live_failures >= allowed && app.settings.keep_connected {
                     app.live_failures = 0;
                     app.failover(&key);
                 }
@@ -1065,14 +1074,27 @@ impl App {
     /// and already tried ones never), as the desktop app does.
     fn failover(&mut self, key: &str) {
         self.failover_tried.insert(key.to_string());
+        // The server this network is set to (a hand pick or the rule's
+        // auto-select) comes first: it knows better than the last pings.
+        if let Some(target) = service::network_target().filter(|t| t != key && !self.failover_tried.contains(t)) {
+            let to = self.server_name(Some(&target));
+            self.toast(format!("«{}» не отвечает, переключаемся на «{to}»", self.server_name(Some(key))));
+            return service::switch_to(&target);
+        }
         let Some(sub) = self.store.subscriptions.iter().find(|s| s.servers.iter().any(|x| servers::key_of(s, x) == key)) else { return };
+        // On Wi-Fi the servers made for mobile whitelists ("LTE") are a last
+        // resort: a regular one is what was lost.
+        let wifi = self.conn.net.kind == NetKind::Wifi;
         let pick = sub
             .servers
             .iter()
             .enumerate()
             .map(|(i, s)| (i, servers::key_of(sub, s)))
             .filter(|(_, k)| k != key && !self.failover_tried.contains(k) && !matches!(self.pings.get(k), Some(Err(_))))
-            .min_by_key(|(i, k)| (ping::sort_key(self.pings.get(k)), *i));
+            .min_by_key(|(i, k)| {
+                let mobile_only = wifi && sub.servers[*i].name.to_lowercase().contains("lte");
+                (mobile_only, ping::sort_key(self.pings.get(k)), *i)
+            });
         let from = self.server_name(Some(key));
         match pick {
             None => {
@@ -1215,7 +1237,13 @@ impl App {
 
     fn toggle(&mut self) {
         match self.conn.status {
-            Status::Off | Status::Failed(_) => service::connect(self.store.settings.last_server.clone()),
+            Status::Off | Status::Failed(_) => {
+                // Connecting: the check has done its job.
+                if self.pinging {
+                    self.stop_ping();
+                }
+                service::connect(self.store.settings.last_server.clone())
+            }
             Status::Connecting | Status::On => service::disconnect(),
         }
     }
@@ -1274,7 +1302,7 @@ impl App {
         }
         let (url, fallback) = (sub.url.clone(), sub.info.fallback_url.clone());
         let settings = &self.store.settings;
-        let headers = identity::subscription_headers(&settings.happ, &self.host.device(), settings.send_device_info, &sub.identity);
+        let headers = mobile_headers(identity::subscription_headers(&settings.happ, &self.host.device(), settings.send_device_info, &sub.identity));
         // Connected: through the tunnel first (the direct path may be what
         // is blocked, as with mobile whitelists), then directly.
         let proxy = self.conn.link.as_ref().map(service::Link::proxy_url);
@@ -1315,7 +1343,11 @@ impl App {
         }
     }
 
+    /// The ping button: starts the check, or stops one under way.
     fn ping_current(&mut self) {
+        if self.pinging {
+            return self.stop_ping();
+        }
         let Some(sub) = self.sub() else { return };
         let jobs: Vec<(String, Server)> = sub.servers.iter().map(|s| (servers::key_of(sub, s), s.clone())).collect();
         self.ping(jobs);
@@ -1331,6 +1363,32 @@ impl App {
         self.ping(vec![job]);
     }
 
+    /// Results come in bursts: the list redraws at most every 150 ms.
+    fn render_servers_soon(&mut self) {
+        if self.render_pending {
+            return;
+        }
+        self.render_pending = true;
+        slint::Timer::single_shot(Duration::from_millis(150), || {
+            with_app(|app| {
+                app.render_pending = false;
+                app.render_servers();
+            })
+        });
+    }
+
+    /// Stops a running check: servers already being pinged finish, the rest
+    /// keep their last result.
+    fn stop_ping(&mut self) {
+        if let Some(cancel) = self.ping_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.pinging = false;
+        self.measuring.clear();
+        self.render_servers();
+        self.render_status();
+    }
+
     fn ping(&mut self, jobs: Vec<(String, Server)>) {
         if self.pinging {
             return;
@@ -1338,27 +1396,46 @@ impl App {
         if jobs.is_empty() {
             return;
         }
-        self.measuring.extend(jobs.iter().map(|(k, _)| k.clone()));
+        // Rows get their spinner when a worker takes them (at most a few at
+        // once): 78 spinners turning together made scrolling stutter.
         self.pinging = true;
         self.render_servers();
         self.render_status();
         let mut settings = self.store.settings.ping.clone();
-        if self.conn.net.kind == NetKind::Mobile {
-            settings.threads = self.settings.mobile_ping_threads;
-        }
+        settings.threads = if self.conn.net.kind == NetKind::Mobile {
+            self.settings.mobile_ping_threads
+        } else {
+            self.settings.wifi_ping_threads
+        };
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.ping_cancel = Some(cancel.clone());
         ping::run_all(
             jobs,
             settings,
             self.host.clone(),
+            cancel.clone(),
+            |key| {
+                later(move |app| {
+                    if app.pinging {
+                        app.measuring.insert(key);
+                        app.render_servers_soon();
+                    }
+                })
+            },
             |key, result| {
                 later(move |app| {
                     app.measuring.remove(&key);
                     app.pings.insert(key, result);
-                    app.render_servers();
+                    app.render_servers_soon();
                 })
             },
-            || {
-                later(|app| {
+            move || {
+                later(move |app| {
+                    // A check stopped and another started since: not ours.
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) && app.pinging {
+                        return;
+                    }
+                    app.ping_cancel = None;
                     app.pinging = false;
                     app.measuring.clear();
                     app.save_pings();
@@ -1531,6 +1608,19 @@ pub fn scanned(text: &str) {
 fn prefill(text: String) {
     *PENDING_LINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
     let _ = slint::invoke_from_event_loop(|| with_app(App::take_link));
+}
+
+/// The panel sees this app's version: duoray-core names its own (the
+/// desktop's). A User-Agent typed by hand or Happ's stays as it is.
+const USER_AGENT: &str = concat!("Duoray/", env!("CARGO_PKG_VERSION"));
+
+fn mobile_headers(mut headers: Vec<(String, String)>) -> Vec<(String, String)> {
+    for (key, value) in &mut headers {
+        if key == "User-Agent" && value == identity::DUORAY_USER_AGENT {
+            *value = USER_AGENT.to_string();
+        }
+    }
+    headers
 }
 
 /// Platforms Happ Spoof can claim, in the picker's order.

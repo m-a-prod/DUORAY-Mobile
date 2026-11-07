@@ -1,6 +1,6 @@
 [package]
 name = "duoray-mobile"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "DUORAY for Android (and later iOS): the desktop client's Slint UI over xray-core's TUN"
 license = "GPL-3.0-only"
