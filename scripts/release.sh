@@ -1,7 +1,9 @@
 #!/bin/sh
 # Publishes a DUORAY for Android release to the update hub.
 #
-#   scripts/release.sh ["Что нового: ..."]
+#   scripts/release.sh [--no-build] ["Что нового: ..."]
+#
+# --no-build publishes the APKs built last time (dist/release-<version>/).
 #
 # Builds one APK per ABI (arm64-v8a, x86_64), signed with the release key,
 # and adds them as the `android` section of the hub's signed manifest, next
@@ -14,6 +16,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+BUILD=1
+if [ "${1:-}" = "--no-build" ]; then BUILD=0; shift; fi
 NOTES=${1:-}
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 BUILD_ID=$(git rev-parse --short=12 HEAD)
@@ -42,14 +46,18 @@ fi
 : "${DUORAY_KEYSTORE_PASSWORD:?set DUORAY_KEYSTORE_PASSWORD in $CONF}"
 export DUORAY_KEYSTORE_PASSWORD
 
-# versionCode grows with the version: 1.2.3 -> 10203.
-CODE=$(echo "$VERSION" | awk -F'[.-]' '{ print $1 * 10000 + $2 * 100 + $3 }')
-GRADLE_ARGS="-PversionName=$VERSION -PversionCode=$CODE -PabiSplit=true" scripts/build-apk.sh release
-
 OUT=dist/release-$VERSION
-rm -rf "$OUT" && mkdir -p "$OUT"
+if [ "$BUILD" = 1 ]; then
+    # versionCode grows with the version: 1.2.3 -> 10203.
+    CODE=$(echo "$VERSION" | awk -F'[.-]' '{ print $1 * 10000 + $2 * 100 + $3 }')
+    GRADLE_ARGS="-PversionName=$VERSION -PversionCode=$CODE -PabiSplit=true" scripts/build-apk.sh release
+    rm -rf "$OUT" && mkdir -p "$OUT"
+    for abi in arm64-v8a x86_64; do
+        cp "android/app/build/outputs/apk/release/app-$abi-release.apk" "$OUT/DUORAY-$VERSION-$abi.apk"
+    done
+fi
 for abi in arm64-v8a x86_64; do
-    cp "android/app/build/outputs/apk/release/app-$abi-release.apk" "$OUT/DUORAY-$VERSION-$abi.apk"
+    [ -f "$OUT/DUORAY-$VERSION-$abi.apk" ] || { echo "no $OUT/DUORAY-$VERSION-$abi.apk: build first" >&2; exit 1; }
 done
 
 # The manifest as the hub serves it now, checked before it is signed again.
