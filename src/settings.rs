@@ -8,11 +8,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::netpolicy::NetworkPolicy;
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MobileSettings {
     pub policy: NetworkPolicy,
     pub apps: AppRules,
+    /// Speeds and the exit country in the notification while the app is
+    /// closed: xray's counters are read every few seconds (src/status.rs).
+    pub background_stats: bool,
+    /// Ping threads on mobile data (store.json's count is for Wi-Fi):
+    /// operators throttle bursts of new connections.
+    pub mobile_ping_threads: u32,
+}
+
+impl Default for MobileSettings {
+    fn default() -> Self {
+        Self { policy: NetworkPolicy::default(), apps: AppRules::default(), background_stats: true, mobile_ping_threads: 1 }
+    }
 }
 
 /// Which apps the VPN carries, the way Android's VpnService can split it.

@@ -185,6 +185,11 @@ export global AppState {
     // 0 HTTP GET, 1 HTTP HEAD, 2 TCP, 3 ICMP.
     in property <int> ping-mode;
     in property <int> ping-threads: 8;
+    in property <int> mobile-ping-threads: 1;
+    in property <bool> background-stats: true;
+    // Reading Wi-Fi names: 0 no location access, 1 approximate only,
+    // 2 precise but location off, 3 readable.
+    in property <int> wifi-access: 3;
     in property <int> ping-timeout: 5000;
     in property <string> ping-url;
     // Identity sent with subscription requests.
@@ -265,6 +270,11 @@ export global Actions {
     callback set-text-scale(int);
     callback set-ping-mode(int);
     callback set-ping-threads(int);
+    callback set-mobile-ping-threads(int);
+    callback set-background-stats(bool);
+    // Whether the window takes the system Back (src/platform: predictive back).
+    callback back-state(bool);
+    callback open-settings(string);
     callback set-ping-timeout(int);
     callback set-ping-url(string);
     callback set-send-device-info(bool);
@@ -301,6 +311,7 @@ export global Actions {
     callback renew();
     callback dismiss-expiry();
     callback buy();
+    callback open-url(string);
 }
 
 // ── Controls (the desktop's, sized for fingers) ────────────────
@@ -1026,7 +1037,8 @@ component ConnectionCard inherits Rectangle {
                 color: root.on && !root.has-exit ? Theme.ok : Theme.fg;
                 overflow: elide;
             }
-            Text {
+            // No empty line under the title: it would sit above the button's middle.
+            if (root.on ? AppState.conn-server : AppState.conn-detail) != "": Text {
                 text: root.on ? AppState.conn-server + (AppState.conn-ping-text != "" ? " · " + AppState.conn-ping-text : "") : AppState.conn-detail;
                 font-size: Theme.fs-caption;
                 color: root.state == "failed" ? Theme.danger : Theme.muted;
@@ -1093,8 +1105,17 @@ component EmptyServers inherits VerticalLayout {
     }
     HorizontalLayout {
         alignment: center;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: "Нет подписки?";
+                font-size: Theme.fs-body;
+                color: Theme.muted;
+            }
+        }
         Button {
-            text: "Купить подписку DUALIZM";
+            text: "Купить";
             clicked => {
                 Actions.buy();
             }
@@ -1437,15 +1458,27 @@ component RoutingPage inherits Rectangle {
                                 }
                             }
                             if AppState.current-ssid == "" && AppState.on-wifi: Text {
-                                text: "Android показывает название Wi-Fi только приложениям с доступом к местоположению.";
+                                text: AppState.wifi-access == 0 ? "Android показывает название Wi-Fi только приложениям с доступом к местоположению." : AppState.wifi-access == 1 ? "Нужен точный доступ к местоположению: с приблизительным Android скрывает название Wi-Fi. Включите «Точное местоположение» для DUORAY." : AppState.wifi-access == 2 ? "Включите геолокацию: пока она выключена, Android скрывает название Wi-Fi." : "Название сети пока не получено.";
                                 font-size: Theme.fs-caption;
                                 color: Theme.muted;
                                 wrap: word-wrap;
                             }
-                            if AppState.current-ssid == "" && AppState.on-wifi: Button {
+                            if AppState.current-ssid == "" && AppState.on-wifi && AppState.wifi-access == 0: Button {
                                 text: "Разрешить";
                                 clicked => {
                                     Actions.ask-wifi-names();
+                                }
+                            }
+                            if AppState.current-ssid == "" && AppState.on-wifi && AppState.wifi-access == 1: Button {
+                                text: "Открыть настройки";
+                                clicked => {
+                                    Actions.open-settings("app");
+                                }
+                            }
+                            if AppState.current-ssid == "" && AppState.on-wifi && AppState.wifi-access == 2: Button {
+                                text: "Включить геолокацию";
+                                clicked => {
+                                    Actions.open-settings("location");
                                 }
                             }
                             if !AppState.on-wifi: Text {
@@ -1919,7 +1952,7 @@ component SettingsPage inherits Rectangle {
                             wrap: word-wrap;
                         }
                         Stepper {
-                            title: "Потоков";
+                            title: "Потоков на Wi-Fi";
                             value: AppState.ping-threads;
                             minus => {
                                 Actions.set-ping-threads(AppState.ping-threads - 1);
@@ -1927,6 +1960,22 @@ component SettingsPage inherits Rectangle {
                             plus => {
                                 Actions.set-ping-threads(AppState.ping-threads + 1);
                             }
+                        }
+                        Stepper {
+                            title: "Потоков в мобильной сети";
+                            value: AppState.mobile-ping-threads;
+                            minus => {
+                                Actions.set-mobile-ping-threads(AppState.mobile-ping-threads - 1);
+                            }
+                            plus => {
+                                Actions.set-mobile-ping-threads(AppState.mobile-ping-threads + 1);
+                            }
+                        }
+                        Text {
+                            text: "Операторы режут много новых соединений сразу: в мобильной сети серверы проверяются по одному.";
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                            wrap: word-wrap;
                         }
                         Stepper {
                             title: "Таймаут";
@@ -1951,6 +2000,39 @@ component SettingsPage inherits Rectangle {
                     VerticalLayout {
                         padding: 12px;
                         spacing: 14px;
+                        ToggleRow {
+                            title: "Скорость в шторке в фоне";
+                            hint: "Пока приложение закрыто, уведомление показывает скорость и страну выхода: DUORAY раз в 3 секунды спрашивает счётчики у xray. Выключите, чтобы беречь батарею.";
+                            checked: AppState.background-stats;
+                            toggled(on) => {
+                                Actions.set-background-stats(on);
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Постоянная VPN";
+                                font-size: Theme.fs-body;
+                                font-weight: 600;
+                            }
+                            Text {
+                                text: "Android сам запускает DUORAY после включения телефона и поднимает VPN к последнему серверу. Включается в настройках Android: DUORAY → «Постоянная VPN». Там же можно блокировать интернет без VPN; приложения, пущенные в обход, тогда останутся без сети.";
+                                font-size: Theme.fs-caption;
+                                color: Theme.muted;
+                                wrap: word-wrap;
+                            }
+                            HorizontalLayout {
+                                Button {
+                                    text: "Настройки VPN";
+                                    clicked => {
+                                        Actions.open-settings("vpn");
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                        }
                         ToggleRow {
                             title: "Подключаться при запуске";
                             hint: "Сразу после запуска DUORAY подключается к последнему выбранному серверу.";
@@ -2071,19 +2153,62 @@ component SettingsPage inherits Rectangle {
                         }
                     }
                 }
+                // About DUORAY (GPL "Appropriate Legal Notices"), as on the desktop.
                 Card {
                     VerticalLayout {
                         padding: 14px;
-                        spacing: 2px;
+                        spacing: 10px;
                         Text {
                             text: "DUORAY " + AppState.version;
-                            font-size: Theme.fs-body;
+                            font-size: Theme.fs-title;
                             font-weight: 700;
                         }
                         Text {
-                            text: "Клиент DUALIZM VPN на xray-core";
+                            text: "Клиент DUALIZM VPN на xray-core. Разработчик — DUALIZM. Новости и поддержка — в Telegram-канале @dualizm_vpn.";
+                            font-size: Theme.fs-small;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Сайт";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.open-url("https://duoray.pro");
+                                }
+                            }
+                            Button {
+                                text: "@dualizm_vpn";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.open-url("https://t.me/dualizm_vpn");
+                                }
+                            }
+                        }
+                        Divider { }
+                        Text {
+                            text: "© 2026 DUALIZM. Свободная программа: распространяется по лицензии GNU GPL v3, её можно изучать, менять и распространять. Поставляется без каких-либо гарантий. Учебный эксперимент, код написан с помощью ИИ-ассистента.";
                             font-size: Theme.fs-caption;
                             color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Исходный код";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.open-url("https://github.com/m-a-prod/DUORAY-Mobile");
+                                }
+                            }
+                            Button {
+                                text: "Лицензия";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.open-url("https://github.com/m-a-prod/DUORAY-Mobile/blob/main/LICENSE");
+                                }
+                            }
                         }
                     }
                 }
@@ -2895,6 +3020,14 @@ export component AppWindow inherits Window {
     in-out property <bool> identity-open;
     in-out property <bool> qr-open;
     in-out property <bool> server-open;
+    // Something Back closes (mirrors the key handler below); at the top level
+    // Back belongs to the system, which then plays its predictive animation.
+    out property <bool> can-go-back: AppState.consent-open || AppState.report-open || root.qr-open || root.identity-open
+        || root.sub-menu || root.adding || root.picking >= 0 || root.confirm-remove || root.server-open || root.apps-open
+        || root.page != 0;
+    changed can-go-back => {
+        Actions.back-state(self.can-go-back);
+    }
     callback open-server-page();
     open-server-page => {
         root.server-open = true;
@@ -3078,11 +3211,11 @@ export component AppWindow inherits Window {
         if root.page == 2: SettingsPage {
             vertical-stretch: 1;
         }
+        // The bottom bar: no outline, its sides would sit on the curved edges
+        // of the screen (only the OLED palette has one).
         Rectangle {
             height: 64px + max(root.bottom, 8px);
             background: Theme.card;
-            border-width: 1px;
-            border-color: Theme.outline;
             HorizontalLayout {
                 padding-left: 12px;
                 padding-right: 12px;

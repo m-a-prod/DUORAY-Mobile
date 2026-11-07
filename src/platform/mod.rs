@@ -23,6 +23,14 @@ pub trait Platform: Send + Sync {
     fn scan_qr(&self) {}
     /// A short tick of the vibration motor (long press feedback).
     fn haptic(&self) {}
+    /// The connection's state for the notification and the Quick Settings
+    /// tile: a packed `status::Notice`.
+    fn show_status(&self, _packed: &str) {}
+    /// Whether the window takes the system Back (a sheet or a page is open);
+    /// otherwise Back leaves the app, with the system's predictive animation.
+    fn set_back_enabled(&self, _on: bool) {}
+    /// A system settings screen: "vpn", "location" or "app" (this app's).
+    fn open_settings(&self, _which: &str) {}
     /// Hands a downloaded, verified APK to the system installer (the user
     /// confirms; Android checks it is signed like this app).
     fn install_apk(&self, _path: &str) {}

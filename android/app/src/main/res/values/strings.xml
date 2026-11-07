@@ -4,4 +4,16 @@
     <string name="channel_vpn">Подключение</string>
     <string name="notification_connected">Подключено</string>
     <string name="action_disconnect">Отключить</string>
+    <string name="tile_connecting">Подключение…</string>
+    <string name="tile_off">Не подключено</string>
+    <string name="scan_hint">Наведите камеру на QR-код подписки</string>
+    <string name="scan_gallery">Из галереи</string>
+    <string name="scan_close">Закрыть</string>
+    <string name="scan_torch">Фонарик</string>
+    <string name="scan_not_found">На картинке нет QR-кода</string>
+    <string name="scan_no_camera">Нет доступа к камере</string>
+    <string name="shortcut_scan">QR-код</string>
+    <string name="shortcut_scan_long">Добавить подписку по QR-коду</string>
+    <string name="shortcut_toggle">Подключить</string>
+    <string name="shortcut_toggle_long">Подключить или отключить VPN</string>
 </resources>

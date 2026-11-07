@@ -7,4 +7,9 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
+
+    <!-- The QR scanner: black behind the camera, white bar icons over it. -->
+    <style name="Theme.Duoray.Scan" parent="Theme.Duoray">
+        <item name="android:windowBackground">#000000</item>
+    </style>
 </resources>

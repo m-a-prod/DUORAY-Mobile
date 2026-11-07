@@ -78,6 +78,20 @@ fn with_app(f: impl FnOnce(&mut App)) {
 }
 
 /// Runs `f` on the UI thread with the app, from any thread.
+/// The system Back (Android's OnBackInvokedCallback), as the Back key the
+/// window handles.
+pub fn back() {
+    let _ = slint::invoke_from_event_loop(|| {
+        with_app(|app| {
+            let Some(ui) = app.ui() else { return };
+            let key: slint::SharedString = slint::platform::Key::Back.into();
+            let window = ui.window();
+            window.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.clone() });
+            window.dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key });
+        })
+    });
+}
+
 fn later(f: impl FnOnce(&mut App) + Send + 'static) {
     let _ = slint::invoke_from_event_loop(move || with_app(f));
 }
@@ -160,7 +174,12 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
     });
     setup(&ui);
     with_app(App::take_link);
+    if let Some(p) = service::platform() {
+        p.set_back_enabled(ui.get_can_go_back());
+    }
+    crate::status::set_window_open(true);
     let result = ui.run();
+    crate::status::set_window_open(false);
     service::set_listener(None);
     APP.with(|a| *a.borrow_mut() = None);
     result
@@ -274,6 +293,36 @@ fn wire(ui: &AppWindow) {
             app.save_store();
             app.render_settings();
         })
+    });
+    a.on_set_mobile_ping_threads(|v| {
+        with_app(|app| {
+            app.settings.mobile_ping_threads = v.clamp(1, 32) as u32;
+            app.save_settings();
+            app.render_settings();
+        })
+    });
+    a.on_set_background_stats(|on| {
+        with_app(|app| {
+            app.settings.background_stats = on;
+            crate::status::set_background_stats(on);
+            app.save_settings();
+            app.render_settings();
+        })
+    });
+    a.on_open_url(|url| {
+        if let Some(p) = service::platform() {
+            p.open_url(&url);
+        }
+    });
+    a.on_back_state(|on| {
+        if let Some(p) = service::platform() {
+            p.set_back_enabled(on);
+        }
+    });
+    a.on_open_settings(|which| {
+        if let Some(p) = service::platform() {
+            p.open_settings(&which);
+        }
     });
     a.on_set_ping_timeout(|v| {
         with_app(|app| {
@@ -590,7 +639,13 @@ impl App {
                 (connected != Some(key.as_str()), ping::sort_key(self.pings.get(&key)))
             });
         }
-        let selected = self.store.settings.last_server.as_deref();
+        // The server in use while connected (a network rule may have picked
+        // it), else the one the next connect will use.
+        let rule = self.settings.policy.server_for(&self.conn.net);
+        let selected = match self.conn.status {
+            Status::On | Status::Connecting => self.conn.server.as_deref(),
+            _ => rule.or(self.store.settings.last_server.as_deref()),
+        };
         let live = (self.conn.status == Status::On).then_some(self.conn.server.as_deref()).flatten();
         let rows: Vec<ServerRow> = order
             .iter()
@@ -643,9 +698,10 @@ impl App {
             Status::Off => (
                 "idle",
                 "Не подключено".to_string(),
-                match &rule {
-                    Some(k) => format!("{}: {}", self.conn.net.describe(), self.server_name(Some(k))),
-                    None => self.server_name(chosen.as_deref()),
+                match (&rule, &chosen) {
+                    (Some(k), _) => format!("{}: {}", self.conn.net.describe(), self.server_name(Some(k))),
+                    (None, Some(k)) => self.server_name(Some(k)),
+                    (None, None) => "Выберите сервер в списке".into(),
                 },
             ),
             Status::Connecting => ("connecting", "Подключение…".into(), self.server_name(server.as_deref())),
@@ -653,7 +709,7 @@ impl App {
             Status::Failed(e) => ("failed", "Ошибка подключения".into(), e.clone()),
         };
         st.set_conn_state(state.into());
-        st.set_conn_title(title.into());
+        st.set_conn_title(title.clone().into());
         st.set_conn_detail(detail.into());
         st.set_can_connect(chosen.is_some());
         st.set_conn_server(self.server_name(server.as_deref()).into());
@@ -669,7 +725,27 @@ impl App {
         st.set_conn_traffic(self.traffic.as_ref().filter(|_| connected).map(Traffic::speeds).unwrap_or_default().into());
         let ping = server.as_deref().and_then(|k| self.pings.get(k)).filter(|_| connected).map(ping::label);
         st.set_conn_ping_text(ping.as_ref().map(|p| p.0.clone()).unwrap_or_default().into());
-        st.set_conn_ping_level(ping.map_or(0, |p| p.1));
+        st.set_conn_ping_level(ping.as_ref().map_or(0, |p| p.1));
+
+        // The same line for the notification and the Quick Settings tile.
+        let exit = self.exit.as_ref().filter(|_| connected);
+        let server_name = self.server_name(server.as_deref());
+        let exit_line = exit.map(|t| crate::status::exit_line(&t.loc));
+        crate::status::publish(crate::status::Notice {
+            state: crate::status::state_code(&self.conn.status),
+            title: match &exit_line {
+                Some((line, _)) => line.clone(),
+                None => title,
+            },
+            text: match (&self.conn.status, &ping) {
+                (Status::Failed(e), _) => e.lines().next().unwrap_or_default().to_string(),
+                (_, Some((ms, level))) if *level != 4 => format!("{server_name} · {ms}"),
+                _ => server_name,
+            },
+            speeds: self.traffic.as_ref().filter(|_| connected).map(Traffic::speeds).unwrap_or_default(),
+            chip: exit_line.map(|(_, chip)| chip).unwrap_or_default(),
+            since_ms: crate::status::since_ms(),
+        });
     }
 
     fn render_status(&self) {
@@ -696,6 +772,7 @@ impl App {
         st.set_policy_enabled(p.enabled);
         st.set_network_text(self.conn.net.describe().into());
         st.set_on_wifi(wifi);
+        st.set_wifi_access(service::wifi_access() as i32);
         st.set_current_ssid(self.conn.net.ssid.clone().filter(|_| wifi).unwrap_or_default().into());
         st.set_wifi_server(label(p.wifi.as_deref()).into());
         st.set_mobile_server(label(p.mobile.as_deref()).into());
@@ -720,6 +797,8 @@ impl App {
             PingMode::Icmp => 3,
         });
         st.set_ping_threads(p.threads as i32);
+        st.set_mobile_ping_threads(self.settings.mobile_ping_threads as i32);
+        st.set_background_stats(self.settings.background_stats);
         st.set_ping_url(p.url.clone().into());
         st.set_ping_proxy_mode(match p.proxy_mode {
             ProxyPingMode::Default => 0,
@@ -1061,6 +1140,9 @@ impl App {
         self.save_store();
         self.render_servers();
         self.render_connection();
+        if self.settings.policy.server_for(&self.conn.net).is_some_and(|k| k != key) {
+            return self.toast(format!("Для сети «{}» сервер задан в маршрутизации", self.conn.net.describe()));
+        }
         if self.store.settings.switch_on_select {
             service::switch_if_connected(&key);
         }
@@ -1151,9 +1233,13 @@ impl App {
         self.pinging = true;
         self.render_servers();
         self.render_status();
+        let mut settings = self.store.settings.ping.clone();
+        if self.conn.net.kind == NetKind::Mobile {
+            settings.threads = self.settings.mobile_ping_threads;
+        }
         ping::run_all(
             jobs,
-            self.store.settings.ping.clone(),
+            settings,
             self.host.clone(),
             |key, result| {
                 later(move |app| {

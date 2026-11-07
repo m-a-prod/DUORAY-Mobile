@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long press on the launcher icon (MainActivity.handleLink). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="scan"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_scan"
+        android:shortcutShortLabel="@string/shortcut_scan"
+        android:shortcutLongLabel="@string/shortcut_scan_long">
+        <intent
+            android:action="space.dualizm.duoray.SCAN"
+            android:targetPackage="space.dualizm.duoray"
+            android:targetClass="space.dualizm.duoray.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="toggle"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_power"
+        android:shortcutShortLabel="@string/shortcut_toggle"
+        android:shortcutLongLabel="@string/shortcut_toggle_long">
+        <intent
+            android:action="space.dualizm.duoray.TOGGLE"
+            android:targetPackage="space.dualizm.duoray"
+            android:targetClass="space.dualizm.duoray.MainActivity" />
+    </shortcut>
+</shortcuts>

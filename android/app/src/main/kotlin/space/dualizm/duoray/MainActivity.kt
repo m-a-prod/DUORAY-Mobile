@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
@@ -15,8 +16,9 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import androidx.core.content.FileProvider
-import com.google.zxing.integration.android.IntentIntegrator
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -25,6 +27,9 @@ import java.io.File
 class MainActivity : NativeActivity() {
     /** An update waiting for "install unknown apps" to be allowed. */
     private var pendingApk: String? = null
+
+    /** The system Back goes to the window while a sheet or a page is open (Android 13+). */
+    private var backCallback: Any? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Native.boot(this)
@@ -43,9 +48,57 @@ class MainActivity : NativeActivity() {
         handleLink(intent)
     }
 
+    /** duoray:// links, the launcher shortcuts, and Rust asking for the VPN with no window. */
     private fun handleLink(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_SCAN -> scanQr()
+            ACTION_TOGGLE -> Native.toggle()
+            ACTION_CONNECT -> startVpn()
+        }
         val link = intent?.data?.toString() ?: return
         if (link.startsWith("duoray://")) Native.openLink(link)
+    }
+
+    /**
+     * Rust says whether the window takes Back. At the top level the callback
+     * is gone and the system plays its predictive "back to home" animation.
+     */
+    fun setBackEnabled(on: Boolean) = runOnUiThread {
+        if (Build.VERSION.SDK_INT < 33) return@runOnUiThread
+        val registered = backCallback as OnBackInvokedCallback?
+        if (on && registered == null) {
+            val callback = OnBackInvokedCallback { Native.back() }
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
+            backCallback = callback
+        } else if (!on && registered != null) {
+            onBackInvokedDispatcher.unregisterOnBackInvokedCallback(registered)
+            backCallback = null
+        }
+    }
+
+    /** "vpn" (always-on lives there), "location", or "app" (this app's permissions). */
+    fun openSettings(which: String) = runOnUiThread {
+        val intent = when (which) {
+            "vpn" -> Intent(Settings.ACTION_VPN_SETTINGS)
+            "location" -> Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+            else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+        }
+        runCatching { startActivity(intent) }
+    }
+
+    /** Tells Rust what keeps Wi-Fi names hidden, if anything (the routing page explains it). */
+    private fun reportWifiAccess() {
+        val fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val locationOn = Build.VERSION.SDK_INT < 28 || getSystemService(LocationManager::class.java)?.isLocationEnabled == true
+        Native.wifiAccess(
+            when {
+                fine && locationOn -> 3
+                fine -> 2
+                coarse -> 1
+                else -> 0
+            },
+        )
     }
 
     /** Asks for the VPN the first time, then starts it. */
@@ -69,12 +122,7 @@ class MainActivity : NativeActivity() {
 
     /** The camera, for a subscription QR code; the result goes to Native.scanned. */
     fun scanQr() = runOnUiThread {
-        IntentIntegrator(this)
-            .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
-            .setPrompt("Наведите камеру на QR-код подписки")
-            .setBeepEnabled(false)
-            .setOrientationLocked(false)
-            .initiateScan()
+        startActivityForResult(Intent(this, ScanActivity::class.java), REQUEST_SCAN)
     }
 
     fun copyText(text: String) = runOnUiThread {
@@ -111,6 +159,7 @@ class MainActivity : NativeActivity() {
 
     override fun onResume() {
         super.onResume()
+        reportWifiAccess()
         val apk = pendingApk ?: return
         if (Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) installApk(apk) else pendingApk = null
     }
@@ -147,7 +196,9 @@ class MainActivity : NativeActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        IntentIntegrator.parseActivityResult(requestCode, resultCode, data)?.contents?.let { Native.scanned(it) }
+        if (requestCode == REQUEST_SCAN && resultCode == RESULT_OK) {
+            data?.getStringExtra(ScanActivity.EXTRA_TEXT)?.let { Native.scanned(it) }
+        }
         if (requestCode == REQUEST_VPN) {
             if (resultCode == RESULT_OK) DuorayVpnService.start(this) else Native.vpnDenied()
         }
@@ -155,12 +206,19 @@ class MainActivity : NativeActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_LOCATION) NetworkWatcher.restart(applicationContext)
+        if (requestCode == REQUEST_LOCATION) {
+            reportWifiAccess()
+            NetworkWatcher.restart(applicationContext)
+        }
     }
 
-    private companion object {
-        const val REQUEST_VPN = 1
-        const val REQUEST_LOCATION = 2
-        const val REQUEST_NOTIFICATIONS = 3
+    companion object {
+        const val ACTION_SCAN = "space.dualizm.duoray.SCAN"
+        const val ACTION_TOGGLE = "space.dualizm.duoray.TOGGLE"
+        const val ACTION_CONNECT = "space.dualizm.duoray.CONNECT"
+        private const val REQUEST_VPN = 1
+        private const val REQUEST_LOCATION = 2
+        private const val REQUEST_NOTIFICATIONS = 3
+        private const val REQUEST_SCAN = 4
     }
 }

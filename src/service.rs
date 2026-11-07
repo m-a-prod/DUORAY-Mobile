@@ -10,6 +10,7 @@
 use std::net::SocketAddr;
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -187,8 +188,13 @@ impl Service {
     }
 
     fn notify(&self) {
+        crate::status::track(&self.status);
         if let Some(listener) = &self.listener {
             listener(self.snapshot());
+        }
+        // No window to publish the full line: the shade gets a plain one.
+        if !crate::status::window_open() {
+            crate::status::background(self.snapshot(), self.host.clone());
         }
     }
 
@@ -228,6 +234,7 @@ pub fn init(host: Host) {
         let _ = std::fs::create_dir_all(host.run_dir());
         tunnel::kill_orphan(&paths.pid);
         let settings = MobileSettings::load(&host.settings());
+        crate::status::set_background_stats(settings.background_stats);
         s.policy = settings.policy;
         s.apps = settings.apps;
         // Daily geoip (ru, ru-whitelist), weekly whitelist and game lists.
@@ -464,7 +471,16 @@ pub fn on_tun_up(fd: RawFd) -> bool {
         let mut s = lock();
         let Some(host) = s.host.clone() else { return false };
         if fd >= 0 && !host.paths().config.exists() {
-            return false;
+            // Always-on VPN before any connection was made here: the last
+            // chosen server, if there is one.
+            let last = Store::load(&host.store()).ok().and_then(|st| st.settings.last_server);
+            match last.map(|key| (write_config(&host, &key), key)) {
+                Some((Ok(link), key)) => {
+                    s.link = Some(link);
+                    s.server = Some(key);
+                }
+                _ => return false,
+            }
         }
         s.tun = Some(fd);
         if !s.active() {
@@ -491,6 +507,21 @@ pub fn on_tun_down() {
         s.status = Status::Off;
     }
     s.notify();
+}
+
+/// What lets the app read Wi-Fi names (Android): 0 no location access,
+/// 1 approximate only, 2 precise but location off, 3 readable.
+static WIFI_ACCESS: AtomicU8 = AtomicU8::new(3);
+
+pub fn wifi_access() -> u8 {
+    WIFI_ACCESS.load(Ordering::Relaxed)
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_wifi_access(code: u8) {
+    if WIFI_ACCESS.swap(code, Ordering::Relaxed) != code {
+        lock().notify();
+    }
 }
 
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]

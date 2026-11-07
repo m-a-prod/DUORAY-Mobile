@@ -11,6 +11,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The connection as a Live Update (Android 16+): a status bar chip, a lock screen card. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <!-- The QR scanner. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Updates from the DUORAY hub: the system installer, after the user confirms. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -27,7 +32,8 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Duoray"
-        android:allowBackup="false">
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true">
 
         <!-- The whole UI is Rust (Slint) inside this NativeActivity. -->
         <activity
@@ -39,6 +45,10 @@
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="duoray_mobile" />
+            <!-- Long press on the icon: scan a QR code, connect or disconnect. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -52,11 +62,26 @@
             </intent-filter>
         </activity>
 
-        <!-- The QR scanner follows the phone's orientation. -->
+        <!-- The QR scanner (CameraX + zxing-cpp). -->
         <activity
-            android:name="com.journeyapps.barcodescanner.CaptureActivity"
-            android:screenOrientation="fullSensor"
-            tools:replace="screenOrientation" />
+            android:name=".ScanActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Duoray.Scan" />
+
+        <!-- Quick Settings: connect or disconnect without opening the app. -->
+        <service
+            android:name=".DuorayTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_duoray"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
 
         <!-- Hands downloaded updates (files/updates) to the system installer. -->
         <provider

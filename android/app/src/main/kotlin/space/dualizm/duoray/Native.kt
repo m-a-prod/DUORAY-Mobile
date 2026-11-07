@@ -1,8 +1,14 @@
 package space.dualizm.duoray
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.service.quicksettings.TileService
 import java.io.File
 
 /** The Rust side, libduoray_mobile.so (src/platform/android.rs). */
@@ -11,8 +17,12 @@ object Native {
         System.loadLibrary("duoray_mobile")
     }
 
+    /** The application, for the calls Rust makes with no window open. */
+    private var app: Context? = null
+
     /** Puts xray's geo databases in place and tells Rust where things are. Safe to repeat. */
     fun boot(context: Context) {
+        app = context.applicationContext
         copyGeoData(context)
         init(
             context.filesDir.absolutePath,
@@ -37,6 +47,43 @@ object Native {
         stamp.writeText(installed)
     }
 
+    /**
+     * Rust's connection state (src/status.rs): the notification and the
+     * Quick Settings tile show it.
+     */
+    @JvmStatic
+    fun onStatus(packed: String) {
+        val status = ConnectionStatus.parse(packed)
+        Handler(Looper.getMainLooper()).post {
+            ConnectionStatus.current = status
+            DuorayVpnService.instance?.refreshNotification()
+            app?.let { context ->
+                runCatching { TileService.requestListeningState(context, ComponentName(context, DuorayTileService::class.java)) }
+            }
+        }
+    }
+
+    /**
+     * Rust wants the VPN with no window open (the tile, a shortcut). When the
+     * VPN is allowed already the service starts right away; otherwise the
+     * app opens and asks.
+     */
+    @JvmStatic
+    fun startVpnInBackground(@Suppress("UNUSED_PARAMETER") unused: String) {
+        val context = app ?: return
+        Handler(Looper.getMainLooper()).post {
+            if (VpnService.prepare(context) == null) {
+                DuorayVpnService.start(context)
+            } else {
+                context.startActivity(
+                    Intent(context, MainActivity::class.java)
+                        .setAction(MainActivity.ACTION_CONNECT)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+    }
+
     @JvmStatic external fun init(filesDir: String, nativeLibraryDir: String, deviceId: String, osVersion: String, model: String)
 
     /** The TUN is open; false when Rust has nothing to run on it. */
@@ -54,4 +101,38 @@ object Native {
 
     /** kind: 0 offline, 1 Wi-Fi, 2 mobile, 3 other. */
     @JvmStatic external fun networkChanged(kind: Int, ssid: String?)
+
+    /** 0 no location access, 1 approximate only, 2 precise but location off, 3 Wi-Fi names readable. */
+    @JvmStatic external fun wifiAccess(code: Int)
+
+    /** The system Back, while the window takes it. */
+    @JvmStatic external fun back()
+
+    /** Connect to the last server, or disconnect. */
+    @JvmStatic external fun toggle()
+}
+
+/** The connection as Rust last described it (src/status.rs, Notice::pack). */
+data class ConnectionStatus(
+    /** 0 off, 1 connecting, 2 on, 3 failed. */
+    val state: Int,
+    val title: String,
+    val text: String,
+    val speeds: String,
+    /** The exit country's code, for the Live Update chip. */
+    val chip: String,
+    /** When the connection came up, Unix ms; 0 unknown. */
+    val sinceMs: Long,
+) {
+    val active: Boolean get() = state == 1 || state == 2
+
+    companion object {
+        var current = ConnectionStatus(0, "Не подключено", "", "", "", 0)
+
+        fun parse(packed: String): ConnectionStatus {
+            val f = packed.split('\u001f')
+            fun at(i: Int) = f.getOrElse(i) { "" }
+            return ConnectionStatus(at(0).toIntOrNull() ?: 0, at(1), at(2), at(3), at(4), at(5).toLongOrNull() ?: 0)
+        }
+    }
 }

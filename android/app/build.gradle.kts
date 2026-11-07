@@ -70,8 +70,13 @@ android {
 }
 
 dependencies {
-    // The QR scanner (camera screen and decoder).
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-    // The scanner asks for the camera through it but does not bring it along.
+    // Notifications (Live Updates), FileProvider, insets.
     implementation("androidx.core:core:1.19.1")
+    // ComponentActivity for the scanner: edge to edge, permissions, the photo picker.
+    implementation("androidx.activity:activity:1.13.0")
+    // The QR scanner: CameraX for the camera, zxing-cpp (Apache-2.0) to decode.
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
+    implementation("io.github.zxing-cpp:android:3.1.1")
 }

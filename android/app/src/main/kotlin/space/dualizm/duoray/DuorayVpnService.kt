@@ -1,18 +1,17 @@
 package space.dualizm.duoray
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.drawable.Icon
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import androidx.core.app.NotificationCompat
 import org.json.JSONObject
 import java.io.File
 
@@ -26,6 +25,7 @@ class DuorayVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         Native.boot(this)
         NetworkWatcher.start(applicationContext)
     }
@@ -107,6 +107,7 @@ class DuorayVpnService : VpnService() {
     override fun onRevoke() = shutdown()
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         if (tun != null) {
             tun?.close()
             tun = null
@@ -120,27 +121,7 @@ class DuorayVpnService : VpnService() {
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.channel_vpn), NotificationManager.IMPORTANCE_LOW),
         )
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val stop = PendingIntent.getService(
-            this,
-            1,
-            Intent(this, DuorayVpnService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_stat_duoray)
-            .setContentTitle(getString(R.string.app_name))
-            .setContentText(getString(R.string.notification_connected))
-            .setContentIntent(open)
-            .setOngoing(true)
-            .addAction(
-                Notification.Action.Builder(
-                    Icon.createWithResource(this, R.drawable.ic_stat_duoray),
-                    getString(R.string.action_disconnect),
-                    stop,
-                ).build(),
-            )
-            .build()
+        val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -148,7 +129,57 @@ class DuorayVpnService : VpnService() {
         }
     }
 
+    /** Rust described the connection anew (Native.onStatus). */
+    fun refreshNotification() {
+        if (tun == null) return
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    /**
+     * The connection in the shade: the exit country, the server and its ping,
+     * the speeds and how long it has been up. On Android 16+ it asks to be a
+     * Live Update: a chip with the exit country in the status bar, a card on
+     * the lock screen.
+     */
+    private fun buildNotification(): android.app.Notification {
+        val status = ConnectionStatus.current
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val stop = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, DuorayVpnService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val title = status.title.ifEmpty { getString(R.string.notification_connected) }
+        val builder = NotificationCompat.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_duoray)
+            .setContentTitle(title)
+            .setContentText(status.text.ifEmpty { null })
+            .setSubText(status.speeds.ifEmpty { null })
+            .setContentIntent(open)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .addAction(R.drawable.ic_stat_duoray, getString(R.string.action_disconnect), stop)
+        if (status.state == 2 && status.sinceMs > 0) {
+            builder.setWhen(status.sinceMs).setShowWhen(true).setUsesChronometer(true)
+        } else {
+            builder.setShowWhen(false)
+        }
+        if (status.state == 2) {
+            builder.setRequestPromotedOngoing(true)
+            builder.setShortCriticalText(status.chip.ifEmpty { "VPN" })
+        }
+        return builder.build()
+    }
+
     companion object {
+        /** The running service, for Rust's status updates. */
+        var instance: DuorayVpnService? = null
+            private set
+
         private const val ACTION_STOP = "space.dualizm.duoray.STOP"
         private const val CHANNEL = "vpn"
         private const val NOTIFICATION_ID = 1
