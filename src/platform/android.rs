@@ -25,6 +25,9 @@ type Target = Mutex<Option<Global<JObject<'static>>>>;
 
 /// The MainActivity on screen, while there is one.
 static ACTIVITY: Target = Mutex::new(None);
+/// Which android_main set ACTIVITY: a replaced activity's thread may end
+/// after the new one started, and must leave the new reference alone.
+static ACTIVITY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// The running DuorayVpnService, while the TUN is open.
 static VPN: Target = Mutex::new(None);
 /// `space.dualizm.duoray.Native`, found while a Java thread called in: a
@@ -41,6 +44,7 @@ pub fn main(app: AndroidApp) {
         let local = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
         env.new_global_ref(&local)
     });
+    let generation = ACTIVITY_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     match activity {
         Ok(a) => *lock(&ACTIVITY) = Some(a),
         Err(e) => log::error!("activity reference: {e}"),
@@ -53,7 +57,10 @@ pub fn main(app: AndroidApp) {
     if let Err(e) = crate::app::run(|_| {}) {
         log::error!("window: {e}");
     }
-    *lock(&ACTIVITY) = None;
+    let mut current = lock(&ACTIVITY);
+    if ACTIVITY_GEN.load(std::sync::atomic::Ordering::SeqCst) == generation {
+        *current = None;
+    }
 }
 
 fn lock(target: &Target) -> std::sync::MutexGuard<'_, Option<Global<JObject<'static>>>> {

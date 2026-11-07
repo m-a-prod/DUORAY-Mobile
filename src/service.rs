@@ -128,7 +128,8 @@ pub struct Link {
     pub socks: SocketAddr,
     pub user: String,
     pub pass: String,
-    pub api: SocketAddr,
+    /// `xray api --server`: a socket file in the app's run directory.
+    pub api: String,
     /// The balancer that carries the traffic, if the config has one.
     pub balancer: Option<Balancer>,
 }
@@ -560,17 +561,69 @@ fn write_config(host: &Host, key: &str) -> Result<Link> {
         log::warn!("routing: {warning}");
     }
     let mut config = mobile_config(rt.config);
-    let api = SocketAddr::from(([127, 0, 0, 1], runtime::free_port()?));
-    balancer::add_api(&mut config, api);
+    let run = host.run_dir();
+    std::fs::create_dir_all(&run)?;
+    // A new name each time: the xray being replaced removes its own socket
+    // when it stops, which must not be the new one's. Old ones go now.
+    if let Ok(entries) = std::fs::read_dir(&run) {
+        for e in entries.flatten() {
+            let name = e.file_name();
+            if name.to_string_lossy().starts_with("api-") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let socket = run.join(format!("api-{:08x}.sock", fastrand::u32(..)));
+    add_api_socket(&mut config, &socket);
+    let api = format!("unix://{}", socket.display());
     let link = Link { socks: rt.socks, user: rt.user, pass: rt.pass, api, balancer: balancer::main_balancer(&config) };
     let paths = host.paths();
-    std::fs::create_dir_all(host.run_dir())?;
     std::fs::write(&paths.config, serde_json::to_vec_pretty(&config)?).context("xray.json")?;
     Ok(link)
 }
 
 /// Inbound the app's own requests (subscription updates, exit check) use.
 pub const APP_INBOUND: &str = "duoray-app";
+
+const API_TAG: &str = "duoray-api";
+
+/// xray's API (stats, routing) on a socket file in the app's own directory,
+/// where SELinux keeps other apps out, instead of a TCP port on 127.0.0.1
+/// that any app could find (VPN detectors scan for them) and talk to.
+pub fn add_api_socket(config: &mut Value, socket: &Path) {
+    config["api"] = json!({ "tag": API_TAG, "services": ["RoutingService", "StatsService"] });
+    if !config["stats"].is_object() {
+        config["stats"] = json!({});
+    }
+    if !config["policy"]["system"].is_object() {
+        if !config["policy"].is_object() {
+            config["policy"] = json!({});
+        }
+        config["policy"]["system"] = json!({});
+    }
+    config["policy"]["system"]["statsInboundUplink"] = json!(true);
+    config["policy"]["system"]["statsInboundDownlink"] = json!(true);
+    let inbound = json!({
+        "tag": API_TAG,
+        "listen": socket.to_string_lossy(),
+        "port": 0,
+        "protocol": "dokodemo-door",
+        "settings": { "address": "127.0.0.1" }
+    });
+    match config["inbounds"].as_array_mut() {
+        Some(inbounds) => inbounds.push(inbound),
+        None => config["inbounds"] = json!([inbound]),
+    }
+    if !config["routing"]["rules"].is_array() {
+        if !config["routing"].is_object() {
+            config["routing"] = json!({});
+        }
+        config["routing"]["rules"] = json!([]);
+    }
+    if let Some(rules) = config["routing"]["rules"].as_array_mut() {
+        rules.insert(0, json!({ "type": "field", "inboundTag": [API_TAG], "outboundTag": API_TAG }));
+    }
+}
 
 /// Drops the empty interface binding `runtime::build` puts on outbounds:
 /// the app is outside its own VPN, its sockets need no binding.
@@ -624,6 +677,18 @@ pub fn mobile_config(mut config: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_listens_on_a_socket_file_not_a_port() {
+        let mut c = json!({ "inbounds": [{ "tag": "socks" }], "routing": { "rules": [{ "type": "field", "port": "53" }] } });
+        add_api_socket(&mut c, Path::new("/data/run/api-1.sock"));
+        assert!(c["api"].get("listen").is_none());
+        assert_eq!(c["inbounds"][1]["listen"], "/data/run/api-1.sock");
+        assert_eq!(c["inbounds"][1]["protocol"], "dokodemo-door");
+        assert_eq!(c["routing"]["rules"][0]["outboundTag"], API_TAG);
+        assert_eq!(c["routing"]["rules"][1]["port"], "53");
+        assert_eq!(c["policy"]["system"]["statsInboundUplink"], true);
+    }
 
     #[test]
     fn tun_inbound_replaces_socks_and_keeps_sniffing() {

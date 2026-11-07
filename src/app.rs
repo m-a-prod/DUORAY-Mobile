@@ -92,6 +92,10 @@ pub fn back() {
     });
 }
 
+/// Bumped by every window: when Android replaces the activity, the old
+/// window's teardown may run after the new one started and must not undo it.
+static WINDOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn later(f: impl FnOnce(&mut App) + Send + 'static) {
     let _ = slint::invoke_from_event_loop(move || with_app(f));
 }
@@ -177,10 +181,13 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
     if let Some(p) = service::platform() {
         p.set_back_enabled(ui.get_can_go_back());
     }
+    let window = WINDOW.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     crate::status::set_window_open(true);
     let result = ui.run();
-    crate::status::set_window_open(false);
-    service::set_listener(None);
+    if WINDOW.load(std::sync::atomic::Ordering::SeqCst) == window {
+        crate::status::set_window_open(false);
+        service::set_listener(None);
+    }
     APP.with(|a| *a.borrow_mut() = None);
     result
 }
