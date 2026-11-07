@@ -210,6 +210,8 @@ export global AppState {
     in property <string> expiry-text;
     // A subscription link from duoray://add/..., for the add sheet.
     in property <string> add-prefill;
+    // The shown subscription's link as a QR code.
+    in property <image> qr-image;
     in property <bool> expiry-can-renew;
 }
 
@@ -263,6 +265,7 @@ export global Actions {
     callback set-show-server-type(bool);
     callback load-log();
     callback connect-fastest();
+    callback show-qr();
     callback scan-qr();
     callback copy-link();
     callback renew();
@@ -2262,6 +2265,7 @@ component SubMenuSheet inherits Rectangle {
             for item[i] in [
                 { text: "Подключиться к самому быстрому", danger: false },
                 { text: "Скопировать ссылку", danger: false },
+                { text: "QR-код", danger: false },
                 { text: "Подмена HWID", danger: false },
                 { text: "Удалить подписку", danger: true },
             ]: Rectangle {
@@ -2276,6 +2280,8 @@ component SubMenuSheet inherits Rectangle {
                         } else if (i == 1) {
                             Actions.copy-link();
                         } else if (i == 2) {
+                            Actions.show-qr();
+                        } else if (i == 3) {
                             root.identity();
                         } else {
                             root.remove();
@@ -2464,6 +2470,11 @@ export component AppWindow inherits Window {
     in-out property <bool> confirm-remove;
     in-out property <bool> sub-menu;
     in-out property <bool> identity-open;
+    in-out property <bool> qr-open;
+    callback open-qr();
+    open-qr => {
+        root.qr-open = true;
+    }
     property <length> top: root.safe-area-insets.top;
     property <length> bottom: root.safe-area-insets.bottom;
     // Std-widget defaults (text without its own color, spinners) follow the
@@ -2484,7 +2495,9 @@ export component AppWindow inherits Window {
             if (event.text != Key.Back && event.text != Key.Escape) {
                 return reject;
             }
-            if (root.identity-open) {
+            if (root.qr-open) {
+                root.qr-open = false;
+            } else if (root.identity-open) {
                 root.identity-open = false;
             } else if (root.sub-menu) {
                 root.sub-menu = false;
@@ -2712,6 +2725,47 @@ export component AppWindow inherits Window {
         }
         identity => {
             root.identity-open = true;
+        }
+    }
+    if root.qr-open: Rectangle {
+        background: Theme.shadow;
+        TouchArea {
+            clicked => {
+                root.qr-open = false;
+            }
+        }
+        Rectangle {
+            x: 24px;
+            y: (parent.height - self.height) / 2;
+            width: parent.width - 48px;
+            height: qr-box.preferred-height;
+            background: Theme.card;
+            border-radius: 22px;
+            border-width: 1px;
+            border-color: Theme.outline;
+            qr-box := VerticalLayout {
+                padding: 18px;
+                spacing: 12px;
+                Text {
+                    text: AppState.header-title;
+                    font-size: Theme.fs-title;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                // White around the code whatever the theme: cameras need it.
+                Image {
+                    source: AppState.qr-image;
+                    height: self.width;
+                    image-rendering: pixelated;
+                }
+                Text {
+                    text: "Отсканируйте камерой другого устройства или в DUORAY: «+» → «QR-код».";
+                    font-size: Theme.fs-caption;
+                    color: Theme.muted;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
         }
     }
     if root.identity-open: IdentitySheet {

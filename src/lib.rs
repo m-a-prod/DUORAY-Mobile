@@ -9,6 +9,7 @@ mod flags;
 mod netpolicy;
 mod ping;
 mod platform;
+mod qr;
 mod servers;
 mod service;
 mod settings;

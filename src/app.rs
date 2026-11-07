@@ -355,6 +355,19 @@ fn wire(ui: &AppWindow) {
         })
     });
     a.on_connect_fastest(|| with_app(App::connect_fastest));
+    a.on_show_qr(|| {
+        with_app(|app| {
+            let Some(ui) = app.ui() else { return };
+            let url = app.sub().map(|s| s.url.clone()).filter(|u| !u.is_empty());
+            match url.as_deref().and_then(crate::qr::image) {
+                Some(img) => {
+                    ui.global::<AppState>().set_qr_image(img);
+                    ui.invoke_open_qr();
+                }
+                None => app.toast("Ссылка слишком длинная для QR-кода".into()),
+            }
+        })
+    });
     a.on_scan_qr(|| {
         if let Some(p) = service::platform() {
             p.scan_qr();
