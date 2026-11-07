@@ -212,6 +212,18 @@ export global AppState {
     in property <string> add-prefill;
     // The shown subscription's link as a QR code.
     in property <image> qr-image;
+    // Error reports and updates.
+    in property <bool> telemetry;
+    in property <bool> auto-update;
+    in property <string> update-info;
+    in property <string> update-banner;
+    in property <string> update-button;
+    in-out property <bool> consent-open;
+    in-out property <bool> report-open;
+    in property <string> report-preview;
+    in property <string> report-code;
+    in property <string> report-error;
+    in property <bool> report-busy;
     // The server editor.
     in property <string> edit-name;
     in property <string> edit-meta;
@@ -272,6 +284,14 @@ export global Actions {
     callback load-log();
     callback connect-fastest();
     callback show-qr();
+    callback consent(bool);
+    callback set-telemetry(bool);
+    callback set-auto-update(bool);
+    callback check-update();
+    callback update-clicked();
+    callback report-problem();
+    callback report-preview(string);
+    callback report-send(string);
     callback open-server(int);
     callback save-server(string);
     callback reset-server();
@@ -1748,40 +1768,39 @@ component SettingsPage inherits Rectangle {
                                 Actions.set-happ(on);
                             }
                         }
-                        if AppState.happ-enabled: VerticalLayout {
+                        // Flat `if`s: Slint under-measures wrapped text in a
+                        // conditional sub-layout.
+                        if AppState.happ-enabled: HorizontalLayout {
+                            spacing: 4px;
+                            for os[i] in ["Android", "iOS", "Windows", "macOS"]: Segment {
+                                text: os;
+                                active: AppState.happ-os == i;
+                                clicked => {
+                                    Actions.set-happ-os(i);
+                                }
+                            }
+                        }
+                        if AppState.happ-enabled: Text {
+                            text: AppState.happ-ua + "\nHWID " + AppState.happ-hwid;
+                            font-family: "monospace";
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                            wrap: char-wrap;
+                        }
+                        if AppState.happ-enabled: HorizontalLayout {
                             spacing: 8px;
-                            HorizontalLayout {
-                                spacing: 4px;
-                                for os[i] in ["Android", "iOS", "Windows", "macOS"]: Segment {
-                                    text: os;
-                                    active: AppState.happ-os == i;
-                                    clicked => {
-                                        Actions.set-happ-os(i);
-                                    }
+                            Button {
+                                text: "Новые ID";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.happ-new-ids();
                                 }
                             }
-                            Text {
-                                text: AppState.happ-ua + "\nHWID " + AppState.happ-hwid;
-                                font-family: "monospace";
-                                font-size: Theme.fs-caption;
-                                color: Theme.muted;
-                                wrap: char-wrap;
-                            }
-                            HorizontalLayout {
-                                spacing: 8px;
-                                Button {
-                                    text: "Новые ID";
-                                    horizontal-stretch: 1;
-                                    clicked => {
-                                        Actions.happ-new-ids();
-                                    }
-                                }
-                                Button {
-                                    text: "Другое устройство";
-                                    horizontal-stretch: 1;
-                                    clicked => {
-                                        Actions.happ-new-device();
-                                    }
+                            Button {
+                                text: "Другое устройство";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.happ-new-device();
                                 }
                             }
                         }
@@ -1835,71 +1854,69 @@ component SettingsPage inherits Rectangle {
                             color: Theme.muted;
                             wrap: word-wrap;
                         }
-                        if AppState.ping-mode <= 1: VerticalLayout {
-                            spacing: 6px;
-                            Text {
-                                text: "Адрес проверки";
-                                font-size: Theme.fs-body;
-                                font-weight: 600;
-                            }
-                            Rectangle {
-                                height: 42px;
-                                border-radius: 10px;
-                                background: Theme.bg;
-                                border-width: url-input.has-focus ? 2px : 1px;
-                                border-color: url-input.has-focus ? Theme.accent : Theme.line;
-                                url-input := TextInput {
-                                    x: 12px;
-                                    width: parent.width - 24px;
-                                    height: parent.height;
-                                    vertical-alignment: center;
-                                    single-line: true;
-                                    text: AppState.ping-url;
-                                    font-size: Theme.fs-small;
-                                    color: Theme.fg;
-                                    accepted => {
-                                        Actions.set-ping-url(self.text);
-                                    }
-                                    edited => {
-                                        Actions.set-ping-url(self.text);
-                                    }
+                        // Flat `if`s, as in the Happ block above.
+                        if AppState.ping-mode <= 1: Text {
+                            text: "Адрес проверки";
+                            font-size: Theme.fs-body;
+                            font-weight: 600;
+                        }
+                        if AppState.ping-mode <= 1: Rectangle {
+                            height: 42px;
+                            border-radius: 10px;
+                            background: Theme.bg;
+                            border-width: url-input.has-focus ? 2px : 1px;
+                            border-color: url-input.has-focus ? Theme.accent : Theme.line;
+                            url-input := TextInput {
+                                x: 12px;
+                                width: parent.width - 24px;
+                                height: parent.height;
+                                vertical-alignment: center;
+                                single-line: true;
+                                text: AppState.ping-url;
+                                font-size: Theme.fs-small;
+                                color: Theme.fg;
+                                accepted => {
+                                    Actions.set-ping-url(self.text);
+                                }
+                                edited => {
+                                    Actions.set-ping-url(self.text);
                                 }
                             }
-                            Text {
-                                text: "Режим";
-                                font-size: Theme.fs-body;
-                                font-weight: 600;
-                            }
-                            HorizontalLayout {
-                                spacing: 4px;
-                                Segment {
-                                    text: "Default";
-                                    active: AppState.ping-proxy-mode == 0;
-                                    clicked => {
-                                        Actions.set-ping-proxy-mode(0);
-                                    }
-                                }
-                                Segment {
-                                    text: "Double";
-                                    active: AppState.ping-proxy-mode == 1;
-                                    clicked => {
-                                        Actions.set-ping-proxy-mode(1);
-                                    }
-                                }
-                                Segment {
-                                    text: "KeepAlive";
-                                    active: AppState.ping-proxy-mode == 2;
-                                    clicked => {
-                                        Actions.set-ping-proxy-mode(2);
-                                    }
+                        }
+                        if AppState.ping-mode <= 1: Text {
+                            text: "Режим";
+                            font-size: Theme.fs-body;
+                            font-weight: 600;
+                        }
+                        if AppState.ping-mode <= 1: HorizontalLayout {
+                            spacing: 4px;
+                            Segment {
+                                text: "Default";
+                                active: AppState.ping-proxy-mode == 0;
+                                clicked => {
+                                    Actions.set-ping-proxy-mode(0);
                                 }
                             }
-                            Text {
-                                text: AppState.ping-proxy-mode == 0 ? "Default: один запрос, включая установку соединения." : AppState.ping-proxy-mode == 1 ? "Double: два запроса в одной сессии xray без повторного использования соединения. Берётся лучший результат." : "KeepAlive: два запроса через один транспорт. Второй идёт по уже установленному соединению; берётся лучший результат.";
-                                font-size: Theme.fs-caption;
-                                color: Theme.muted;
-                                wrap: word-wrap;
+                            Segment {
+                                text: "Double";
+                                active: AppState.ping-proxy-mode == 1;
+                                clicked => {
+                                    Actions.set-ping-proxy-mode(1);
+                                }
                             }
+                            Segment {
+                                text: "KeepAlive";
+                                active: AppState.ping-proxy-mode == 2;
+                                clicked => {
+                                    Actions.set-ping-proxy-mode(2);
+                                }
+                            }
+                        }
+                        if AppState.ping-mode <= 1: Text {
+                            text: AppState.ping-proxy-mode == 0 ? "Default: один запрос, включая установку соединения." : AppState.ping-proxy-mode == 1 ? "Double: два запроса в одной сессии xray без повторного использования соединения. Берётся лучший результат." : "KeepAlive: два запроса через один транспорт. Второй идёт по уже установленному соединению; берётся лучший результат.";
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                            wrap: word-wrap;
                         }
                         Stepper {
                             title: "Потоков";
@@ -1956,6 +1973,74 @@ component SettingsPage inherits Rectangle {
                             checked: AppState.switch-on-select;
                             toggled(on) => {
                                 Actions.set-switch-on-select(on);
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
+                        text: "ОТЧЁТЫ И ОБНОВЛЕНИЯ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+                        ToggleRow {
+                            title: "Отправлять отчёты об ошибках";
+                            hint: "Версия, система, текст ошибки и журнал последних действий, чтобы мы нашли и исправили проблему. Ссылки подписок, адреса и названия серверов, ключи и UUID вырезаются.";
+                            checked: AppState.telemetry;
+                            toggled(on) => {
+                                Actions.set-telemetry(on);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Проверять обновления";
+                            hint: "Новая версия скачивается по Wi-Fi и проверяется по цифровой подписи. Устанавливается только по вашему нажатию.";
+                            checked: AppState.auto-update;
+                            toggled(on) => {
+                                Actions.set-auto-update(on);
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Проверить обновления";
+                                clicked => {
+                                    Actions.check-update();
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        if AppState.update-info != "": Text {
+                            text: AppState.update-info;
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        Divider { }
+                        VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                Button {
+                                    text: "Сообщить о проблеме";
+                                    clicked => {
+                                        Actions.report-problem();
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            Text {
+                                text: "Опишите, что случилось, и вы получите код отчёта. Передайте его в поддержку.";
+                                font-size: Theme.fs-caption;
+                                color: Theme.muted;
+                                wrap: word-wrap;
                             }
                         }
                     }
@@ -2479,19 +2564,83 @@ component IdentitySheet inherits Rectangle {
                     }
                 }
             }
-            if AppState.sub-id-mode == 2: VerticalLayout {
+            if AppState.sub-id-mode == 2: Text {
+                text: AppState.sub-happ-ua;
+                font-family: "monospace";
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                wrap: char-wrap;
+            }
+            if AppState.sub-id-mode == 2: Button {
+                text: "Новое устройство";
+                clicked => {
+                    Actions.sub-new-happ();
+                }
+            }
+        }
+    }
+}
+
+// Asked once, on the first start: may DUORAY send error reports?
+component ConsentSheet inherits Rectangle {
+    background: Theme.shadow;
+    // An answer is needed: a tap outside does not close it.
+    TouchArea { }
+    Rectangle {
+        x: 20px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 40px;
+        height: consent-box.preferred-height;
+        background: Theme.card;
+        border-radius: 22px;
+        border-width: 1px;
+        border-color: Theme.outline;
+        consent-box := VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+            Text {
+                text: "Отчёты об ошибках";
+                font-size: Theme.fs-title;
+                font-weight: 700;
+            }
+            Text {
+                text: "Если что-то сломается, DUORAY может отправить нам отчёт, чтобы мы быстрее нашли и исправили ошибку. Отправлять или нет, решаете вы.";
+                font-size: Theme.fs-small;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "В отчёте: версия DUORAY и Android, модель телефона, текст ошибки, журнал последних действий, тип протокола и ваши настройки маршрутизации.";
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Никогда не отправляются: ссылки подписок, адреса и названия серверов, ключи и UUID. Ваш IP-адрес с отчётом не сохраняется. Отчёты хранятся 90 дней.";
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Передумать можно в любой момент: Настройки → Отчёты и обновления.";
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
                 spacing: 8px;
-                Text {
-                    text: AppState.sub-happ-ua;
-                    font-family: "monospace";
-                    font-size: Theme.fs-caption;
-                    color: Theme.muted;
-                    wrap: char-wrap;
+                padding-top: 4px;
+                alignment: end;
+                Button {
+                    text: "Не отправлять";
+                    clicked => {
+                        Actions.consent(false);
+                    }
                 }
                 Button {
-                    text: "Новое устройство";
+                    text: "Разрешить";
+                    primary: true;
                     clicked => {
-                        Actions.sub-new-happ();
+                        Actions.consent(true);
                     }
                 }
             }
@@ -2499,8 +2648,187 @@ component IdentitySheet inherits Rectangle {
     }
 }
 
-// The end-of-subscription reminder, above the list.
+// "Сообщить о проблеме": a note, a look at what goes out, then the code.
+// No conditional sub-layouts here: Slint under-measures wrapped text in
+// them, which cut the buttons off.
+component ReportSheet inherits Rectangle {
+    in property <length> top-inset;
+    callback close();
+    property <string> note;
+    property <bool> sent: AppState.report-code != "";
+    background: Theme.shadow;
+    TouchArea {
+        clicked => {
+            if !AppState.report-busy {
+                root.close();
+            }
+        }
+    }
+    Rectangle {
+        x: 12px;
+        y: root.top-inset + 12px;
+        width: parent.width - 24px;
+        height: min(panel.preferred-height, root.height - root.top-inset - 24px);
+        background: Theme.card;
+        border-radius: 18px;
+        border-width: 1px;
+        border-color: Theme.outline;
+        clip: true;
+        TouchArea { }
+        // Scrolls when it does not fit (landscape).
+        Flickable {
+            content-width: self.width;
+            content-height: panel.preferred-height;
+            panel := VerticalLayout {
+                width: parent.width;
+                padding: 16px;
+                spacing: 10px;
+                Text {
+                    text: "Сообщить о проблеме";
+                    font-size: Theme.fs-heading;
+                    font-weight: 800;
+                }
+                Text {
+                    text: root.sent ? "Отчёт отправлен. Код отчёта, передайте его в поддержку:" : "Что случилось и что вы делали перед этим? Вместе с описанием уйдёт журнал последних действий, без ссылок, адресов серверов и ключей.";
+                    font-size: root.sent ? Theme.fs-small : Theme.fs-caption;
+                    color: root.sent ? Theme.fg : Theme.muted;
+                    wrap: word-wrap;
+                }
+                if root.sent: Text {
+                    text: AppState.report-code;
+                    font-size: 28px;
+                    font-weight: 800;
+                    color: Theme.accent;
+                    horizontal-alignment: center;
+                }
+                if !root.sent: Rectangle {
+                    height: 110px;
+                    border-radius: 12px;
+                    background: Theme.bg;
+                    border-width: note.has-focus ? 2px : 1px;
+                    border-color: note.has-focus ? Theme.accent : Theme.line;
+                    note := TextInput {
+                        x: 12px;
+                        y: 10px;
+                        width: parent.width - 24px;
+                        height: parent.height - 20px;
+                        text <=> root.note;
+                        single-line: false;
+                        wrap: word-wrap;
+                        font-size: Theme.fs-small;
+                        color: Theme.fg;
+                        selection-background-color: Theme.accent.with-alpha(0.3);
+                    }
+                    if root.note == "": Text {
+                        x: 12px;
+                        y: 10px;
+                        width: parent.width - 24px;
+                        text: "Например: не подключается к Нидерландам после обновления";
+                        font-size: Theme.fs-small;
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                    }
+                }
+                if !root.sent && AppState.report-preview != "": Rectangle {
+                    height: 200px;
+                    border-radius: 12px;
+                    background: Theme.bg;
+                    clip: true;
+                    Flickable {
+                        content-width: self.width;
+                        content-height: preview.preferred-height + 20px;
+                        preview := Text {
+                            x: 10px;
+                            y: 10px;
+                            width: parent.width - 20px;
+                            text: AppState.report-preview;
+                            font-family: "monospace";
+                            font-size: 10px;
+                            color: Theme.muted;
+                            wrap: char-wrap;
+                        }
+                    }
+                }
+                if AppState.report-error != "": Text {
+                    text: AppState.report-error;
+                    font-size: Theme.fs-caption;
+                    color: Theme.danger;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: root.sent ? "Скопировать код" : AppState.report-preview == "" ? "Что отправится?" : "Обновить";
+                        clicked => {
+                            if root.sent {
+                                Actions.copy-text(AppState.report-code);
+                            } else {
+                                Actions.report-preview(root.note);
+                            }
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: root.sent ? "Готово" : AppState.report-busy ? "Отправка…" : "Отправить";
+                        primary: true;
+                        enabled: !AppState.report-busy;
+                        clicked => {
+                            if root.sent {
+                                root.close();
+                            } else {
+                                Actions.report-send(root.note);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A newer DUORAY: downloading, or ready to install. Shown like ExpiryBanner.
+component UpdateBanner inherits Rectangle {
+    in property <bool> show;
+    visible: root.show;
+    height: root.show ? max(48px, self.preferred-height) : 0px;
+    background: Theme.accent.with-alpha(0.14);
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.accent.with-alpha(0.4);
+    HorizontalLayout {
+        padding: 6px;
+        padding-left: 14px;
+        spacing: 6px;
+        Text {
+            text: AppState.update-banner;
+            font-size: Theme.fs-small;
+            font-weight: 600;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        if AppState.update-button != "": VerticalLayout {
+            alignment: center;
+            Button {
+                text: AppState.update-button;
+                primary: true;
+                height: 36px;
+                clicked => {
+                    Actions.update-clicked();
+                }
+            }
+        }
+    }
+}
+
+// The end-of-subscription reminder, above the list. Always in the layout,
+// zero high when hidden: Slint mis-measures wrapped text in `if` elements.
 component ExpiryBanner inherits Rectangle {
+    in property <bool> show;
+    visible: root.show;
+    height: root.show ? self.preferred-height : 0px;
     background: Theme.warn.with-alpha(0.14);
     border-radius: Theme.radius;
     border-width: 1px;
@@ -2599,7 +2927,13 @@ export component AppWindow inherits Window {
             if (event.text != Key.Back && event.text != Key.Escape) {
                 return reject;
             }
-            if (root.qr-open) {
+            if (AppState.consent-open) {
+                // An answer is needed.
+            } else if (AppState.report-open) {
+                if (!AppState.report-busy) {
+                    AppState.report-open = false;
+                }
+            } else if (root.qr-open) {
                 root.qr-open = false;
             } else if (root.identity-open) {
                 root.identity-open = false;
@@ -2680,14 +3014,21 @@ export component AppWindow inherits Window {
                     padding-top: 4px;
                     padding-bottom: 96px;
                     if AppState.subs.length + (AppState.has-manual ? 1 : 0) > 1: Chips { }
-                    if AppState.expiry-text != "": HorizontalLayout {
+                    VerticalLayout {
                         padding-left: 12px;
                         padding-right: 12px;
-                        ExpiryBanner { }
-                    }
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
+                        UpdateBanner {
+                            show: AppState.update-banner != "";
+                        }
+                        Rectangle {
+                            height: AppState.update-banner != "" ? 8px : 0px;
+                        }
+                        ExpiryBanner {
+                            show: AppState.expiry-text != "";
+                        }
+                        Rectangle {
+                            height: AppState.expiry-text != "" ? 8px : 0px;
+                        }
                         Card {
                             VerticalLayout {
                                 HeaderCard {
@@ -2891,6 +3232,13 @@ export component AppWindow inherits Window {
             root.identity-open = false;
         }
     }
+    if AppState.report-open: ReportSheet {
+        top-inset: root.top;
+        close => {
+            AppState.report-open = false;
+        }
+    }
+    if AppState.consent-open: ConsentSheet { }
     if root.confirm-remove: ConfirmSheet {
         title: "Удалить подписку «" + AppState.header-title + "»?";
         action: "Удалить";

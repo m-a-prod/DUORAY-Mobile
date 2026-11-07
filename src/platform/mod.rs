@@ -23,6 +23,9 @@ pub trait Platform: Send + Sync {
     fn scan_qr(&self) {}
     /// A short tick of the vibration motor (long press feedback).
     fn haptic(&self) {}
+    /// Hands a downloaded, verified APK to the system installer (the user
+    /// confirms; Android checks it is signed like this app).
+    fn install_apk(&self, _path: &str) {}
     /// Apps the user can route, for the per-app list. May block.
     fn list_apps(&self) -> Vec<AppInfo> {
         Vec::new()

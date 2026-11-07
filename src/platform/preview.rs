@@ -38,6 +38,10 @@ impl Platform for Preview {
         eprintln!("open {url}");
     }
 
+    fn install_apk(&self, path: &str) {
+        eprintln!("install {path}");
+    }
+
     fn list_apps(&self) -> Vec<AppInfo> {
         [("Telegram", "org.telegram.messenger"), ("Сбербанк", "ru.sberbankmobile"), ("Госуслуги", "ru.rostel"), ("YouTube", "com.google.android.youtube")]
             .into_iter()

@@ -202,9 +202,11 @@ impl Service {
         (self.active() && self.tun.is_some() && self.server.as_deref() != Some(target)).then(|| target.to_string())
     }
 
-    /// Records the failure and stops xray; the caller then closes the VPN.
-    fn fail(&mut self, message: String) -> Option<Arc<dyn Platform>> {
+    /// Records the failure, reports it (`kind`, with consent) and stops
+    /// xray; the caller then closes the VPN.
+    fn fail(&mut self, kind: &str, message: String) -> Option<Arc<dyn Platform>> {
         log::warn!("connection failed: {message}");
+        crate::diag::auto(kind, &message);
         self.attempt += 1;
         self.status = Status::Failed(message);
         if let Some(x) = self.xray.take() {
@@ -221,6 +223,7 @@ impl Service {
 pub fn init(host: Host) {
     let mut s = lock();
     if s.host.is_none() {
+        crate::diag::init(&host.data, &format!("{} {}", host.os, host.os_version), &host.model);
         let paths = host.paths();
         let _ = std::fs::create_dir_all(host.run_dir());
         tunnel::kill_orphan(&paths.pid);
@@ -375,7 +378,7 @@ fn start(key: String) {
         }
         let prepared = prepared.map(|link| s.link = Some(link));
         if let Err(e) = prepared {
-            let platform = s.fail(format!("{e:#}"));
+            let platform = s.fail("connect_failed", format!("{e:#}"));
             drop(s);
             if let Some(p) = platform {
                 p.stop_vpn();
@@ -420,12 +423,13 @@ fn launch(attempt: u64) {
     }
     match result {
         Ok(x) => {
+            crate::diag::log("connected");
             s.xray = x;
             s.status = Status::On;
             s.notify();
         }
         Err(e) => {
-            let platform = s.fail(format!("{e:#}"));
+            let platform = s.fail("connect_failed", format!("{e:#}"));
             drop(s);
             if let Some(p) = platform {
                 p.stop_vpn();
@@ -446,7 +450,7 @@ fn on_xray_exit(attempt: u64, exit: tunnel::Exit) {
             message.push_str(":\n");
             message.push_str(&exit.log_tail);
         }
-        s.fail(message)
+        s.fail("tunnel_stopped", message)
     };
     if let Some(p) = platform {
         p.stop_vpn();
@@ -504,6 +508,8 @@ pub fn on_network(net: NetworkEnv) {
             return;
         }
         log::info!("network: {}", net.describe());
+        // The kind only: a Wi-Fi name says where the user is.
+        crate::diag::log(format!("network: {:?}", net.kind));
         s.net = net;
         s.notify();
         s.wanted_switch()

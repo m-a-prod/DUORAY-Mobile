@@ -16,12 +16,15 @@ use duoray_core::store::{self, PingMode, ProxyPingMode, Store, Subscription};
 use duoray_core::subscription;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+use self::support::UpdateState;
 use crate::exit::{self, Traffic};
 use crate::netpolicy::{NetKind, NetworkPolicy};
 use crate::platform::AppInfo;
 use crate::service::{self, Host, Snapshot, Status};
 use crate::settings::{AppMode, MobileSettings};
 use crate::{Actions, AppRow, AppState, AppWindow, ServerRow, SsidRow, SubItem, flags, ping, servers, themes, tunnel};
+
+mod support;
 
 type PingResult = Result<Duration, String>;
 
@@ -56,8 +59,10 @@ struct App {
     polling: bool,
     apps: Vec<AppInfo>,
     apps_filter: String,
+    update: UpdateState,
     toast_timer: slint::Timer,
     poll_timer: slint::Timer,
+    update_timer: slint::Timer,
 }
 
 thread_local! {
@@ -120,8 +125,10 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         polling: false,
         apps: Vec::new(),
         apps_filter: String::new(),
+        update: UpdateState::default(),
         toast_timer: slint::Timer::default(),
         poll_timer: slint::Timer::default(),
+        update_timer: slint::Timer::default(),
     };
     APP.with(|a| *a.borrow_mut() = Some(Rc::new(RefCell::new(app))));
     wire(&ui);
@@ -130,6 +137,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         app.apply_appearance();
         app.render_all();
         app.refresh_stale();
+        app.start_support();
     });
     // "Подключаться при запуске": the last server, a moment after start.
     if autoconnect && service::snapshot().status == Status::Off {
@@ -164,6 +172,14 @@ fn wire(ui: &AppWindow) {
     a.on_select_server(|row| with_app(|app| app.select_server(row as usize)));
     a.on_remove_server(|row| with_app(|app| app.remove_server(row as usize)));
     a.on_toggle_connection(|| with_app(App::toggle));
+    a.on_consent(|agree| with_app(|app| app.set_consent(agree)));
+    a.on_set_telemetry(|on| with_app(|app| app.set_consent(on)));
+    a.on_set_auto_update(|on| with_app(|app| app.edit_settings(|s| s.auto_update = on)));
+    a.on_check_update(|| with_app(|app| app.check_update(true)));
+    a.on_update_clicked(|| with_app(App::update_clicked));
+    a.on_report_problem(|| with_app(App::open_report));
+    a.on_report_preview(|note| with_app(|app| app.preview_report(&note)));
+    a.on_report_send(|note| with_app(|app| app.send_report(&note)));
     a.on_refresh(|| {
         with_app(|app| {
             if let Some(id) = app.sub().map(|s| s.id.clone()) {
@@ -720,6 +736,8 @@ impl App {
         st.set_happ_os(HAPP_OS.iter().position(|o| *o == happ.os).unwrap_or(0) as i32);
         st.set_autoconnect(self.store.settings.autoconnect);
         st.set_keep_connected(self.store.settings.keep_connected);
+        st.set_telemetry(self.store.settings.telemetry == Some(true));
+        st.set_auto_update(self.store.settings.auto_update);
     }
 
     fn render_apps(&self) {
@@ -766,6 +784,7 @@ impl App {
         self.render_servers();
         self.render_connection();
         self.render_networks();
+        self.update_diag_context();
     }
 
     /// The exit country through the tunnel; a balancer that has not picked a
@@ -1079,11 +1098,12 @@ impl App {
             .map_err(|e| format!("{e:#}"));
             later(move |app| {
                 app.refreshing.remove(&id);
-                let ok = result.is_ok();
+                if let Err(e) = &result {
+                    crate::diag::auto_online("subscription", e);
+                }
                 app.store.apply(&id, result);
                 app.save_store();
                 app.forget_dead_rules();
-                let _ = ok;
                 app.render_all();
             });
         });

@@ -4,6 +4,7 @@
 
 mod app;
 mod deeplink;
+mod diag;
 mod exit;
 mod flags;
 mod netpolicy;
@@ -13,8 +14,11 @@ mod qr;
 mod servers;
 mod service;
 mod settings;
+#[cfg(test)]
+mod testing;
 mod themes;
 mod tunnel;
+mod update;
 
 slint::include_modules!();
 

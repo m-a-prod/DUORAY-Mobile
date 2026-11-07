@@ -22,11 +22,36 @@ android {
         }
     }
 
+    // Releases (scripts/release.sh) are signed with the key in
+    // DUORAY_KEYSTORE; updates install only over an APK with the same key.
+    // Without it a release build is signed for debugging: installable, not
+    // publishable.
+    val keystore = System.getenv("DUORAY_KEYSTORE")
+    signingConfigs {
+        if (keystore != null) {
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("DUORAY_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("DUORAY_KEY_ALIAS") ?: "duoray"
+                keyPassword = System.getenv("DUORAY_KEY_PASSWORD") ?: System.getenv("DUORAY_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Until a release key exists: installable, not publishable.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (keystore != null) "release" else "debug")
+        }
+    }
+
+    // -PabiSplit=true: one APK per ABI (the hub serves each phone its own).
+    splits {
+        abi {
+            isEnable = findProperty("abiSplit") == "true"
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
         }
     }
 

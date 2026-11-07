@@ -5,6 +5,33 @@ fn main() {
     let config = slint_build::CompilerConfiguration::new().with_style("material".into());
     slint_build::compile_with_config("ui/app.slint", config).expect("slint build failed");
     embed_flags();
+    embed_build_id();
+}
+
+/// DUORAY_BUILD: the git commit this library is built from ("-dirty" with
+/// uncommitted changes). Updates compare it with the manifest's, so a
+/// re-uploaded build of the same commit is not offered again.
+fn embed_build_id() {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let id = match git(&["rev-parse", "--short=12", "HEAD"]) {
+        Some(commit) if git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()) => {
+            format!("{commit}-dirty")
+        }
+        Some(commit) => commit,
+        None => "unknown".into(),
+    };
+    println!("cargo:rustc-env=DUORAY_BUILD={id}");
+    // A commit moves the branch ref, not HEAD itself.
+    for path in [".git/HEAD", ".git/index", ".git/refs/heads", ".git/packed-refs"] {
+        println!("cargo:rerun-if-changed={path}");
+    }
 }
 
 /// Generates `flag_svg(code)` over assets/flags/<iso>.svg (Twemoji, CC-BY 4.0).

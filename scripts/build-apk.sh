@@ -2,6 +2,7 @@
 # Builds the APK: xray (latest release), the Rust library for each ABI,
 # then the Kotlin shell with Gradle.
 #   scripts/build-apk.sh [debug|release]
+# GRADLE_ARGS go to Gradle (scripts/release.sh passes the version).
 # Needs ANDROID_HOME, ANDROID_NDK_HOME, cargo-ndk and the Rust Android targets.
 # DUORAY must be checked out next to this repository (duoray-core).
 set -eu
@@ -29,5 +30,6 @@ cargo ndk $targets -P 26 -o android/app/src/main/jniLibs build --lib $release
 task=assembleDebug
 [ "$PROFILE" = release ] && task=assembleRelease
 cd android
-./gradlew --no-daemon "$task"
+# shellcheck disable=SC2086
+./gradlew --no-daemon "$task" ${GRADLE_ARGS:-}
 ls -1 app/build/outputs/apk/"$PROFILE"/*.apk

@@ -118,6 +118,10 @@ impl Platform for Android {
         call(&ACTIVITY, jni_str!("openUrl"), Some(url));
     }
 
+    fn install_apk(&self, path: &str) {
+        call(&ACTIVITY, jni_str!("installApk"), Some(path));
+    }
+
     /// The activity lists launchable apps into files/apps.json (icons as
     /// PNGs next to it), on this thread.
     fn list_apps(&self) -> Vec<AppInfo> {

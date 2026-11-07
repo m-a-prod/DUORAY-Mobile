@@ -13,7 +13,9 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.HapticFeedbackConstants
+import androidx.core.content.FileProvider
 import com.google.zxing.integration.android.IntentIntegrator
 import org.json.JSONArray
 import org.json.JSONObject
@@ -21,6 +23,9 @@ import java.io.File
 
 /** Hosts the Rust UI (android_main). The public methods are called from Rust. */
 class MainActivity : NativeActivity() {
+    /** An update waiting for "install unknown apps" to be allowed. */
+    private var pendingApk: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         Native.boot(this)
         NetworkWatcher.start(applicationContext)
@@ -78,6 +83,36 @@ class MainActivity : NativeActivity() {
 
     fun openUrl(url: String) = runOnUiThread {
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    }
+
+    /**
+     * A downloaded update (verified by Rust) to the system installer. The
+     * first time Android asks to allow installs from DUORAY; once allowed,
+     * the install goes on from onResume.
+     */
+    fun installApk(path: String) = runOnUiThread {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            pendingApk = path
+            runCatching {
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            }
+            return@runOnUiThread
+        }
+        pendingApk = null
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", File(path))
+        runCatching {
+            startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val apk = pendingApk ?: return
+        if (Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) installApk(apk) else pendingApk = null
     }
 
     /** Launchable apps into files/apps.json, icons as PNGs in files/icons. Runs on the caller's thread. */
