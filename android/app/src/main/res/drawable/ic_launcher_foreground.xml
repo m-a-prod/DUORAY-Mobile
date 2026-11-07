@@ -1,39 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ui/assets/logo-on.svg (206x169 view box) scaled into the middle of a
-     108 dp canvas: 56 dp wide, well inside the 66 dp safe zone. -->
+<!-- The desktop icon (ui/assets/duoray-icon.svg): the white DUORAY mark, the
+     second D at half opacity. 44 dp wide in the middle of the 108 dp canvas,
+     the share of the visible icon it has on the desktop; inside the 66 dp
+     safe zone even under a round mask. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.2718"
-        android:scaleY="0.2718"
-        android:translateX="27.1"
-        android:translateY="32.1">
+        android:scaleX="0.2222"
+        android:scaleY="0.2222"
+        android:translateX="32"
+        android:translateY="36.11">
         <path
+            android:fillColor="#FFFFFFFF"
             android:fillType="evenOdd"
-            android:pathData="M0 0H47.5A80.5 80.5 0 0 1 47.5 161H0ZM17.71 17.71H47.5A62.79 62.79 0 0 1 47.5 143.29H17.71Z">
-            <aapt:attr name="android:fillColor">
-                <gradient android:type="linear" android:startX="0" android:startY="161" android:endX="198" android:endY="0">
-                    <item android:offset="0" android:color="#FFC97FA3" />
-                    <item android:offset="0.5" android:color="#FFF4C2D7" />
-                    <item android:offset="1" android:color="#FFFDEBF3" />
-                </gradient>
-            </aapt:attr>
-        </path>
+            android:pathData="M0 0H47.5A80.5 80.5 0 0 1 47.5 161H0ZM17.71 17.71H47.5A62.79 62.79 0 0 1 47.5 143.29H17.71Z" />
         <path
             android:fillAlpha="0.5"
+            android:fillColor="#FFFFFFFF"
             android:fillType="evenOdd"
-            android:pathData="M198 0H150.5A80.5 80.5 0 0 0 150.5 161H198ZM180.29 17.71H150.5A62.79 62.79 0 0 0 150.5 143.29H180.29Z">
-            <aapt:attr name="android:fillColor">
-                <gradient android:type="linear" android:startX="0" android:startY="161" android:endX="198" android:endY="0">
-                    <item android:offset="0" android:color="#FFC97FA3" />
-                    <item android:offset="0.5" android:color="#FFF4C2D7" />
-                    <item android:offset="1" android:color="#FFFDEBF3" />
-                </gradient>
-            </aapt:attr>
-        </path>
+            android:pathData="M198 0H150.5A80.5 80.5 0 0 0 150.5 161H198ZM180.29 17.71H150.5A62.79 62.79 0 0 0 150.5 143.29H180.29Z" />
     </group>
 </vector>
