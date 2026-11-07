@@ -12,7 +12,7 @@ use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use duoray_core::balancer::{self, Balancer};
@@ -31,6 +31,10 @@ use crate::tunnel::{self, Xray};
 
 /// MTU of the TUN, on both sides: the platform's interface and xray's stack.
 pub const TUN_MTU: u32 = 1500;
+
+/// What the platform hands over instead of a TUN in «Прокси»: the service
+/// runs, xray only listens on its proxy ports.
+pub const NO_TUN: RawFd = -2;
 
 /// What the platform shell knows about the app and the device.
 #[derive(Debug, Clone)]
@@ -194,7 +198,7 @@ impl Service {
             server: self.server.clone(),
             net: self.net.clone(),
             link: (self.status == Status::On).then(|| self.link.clone()).flatten(),
-            tun: self.tun.is_some(),
+            tun: self.tun.is_some_and(|fd| fd != NO_TUN),
         }
     }
 
@@ -237,7 +241,7 @@ impl Service {
         self.notify();
         // Kill switch: the TUN stays, nothing reads it, so apps get no
         // network instead of going around the VPN. Only «Отключить» ends it.
-        if KILL_SWITCH.load(Ordering::Relaxed) && self.tun.is_some() {
+        if KILL_SWITCH.load(Ordering::Relaxed) && self.tun.is_some_and(|fd| fd != NO_TUN) {
             // Tries again every few seconds until it works or «Отключить».
             let (attempt, key) = (self.attempt, self.server.clone());
             std::thread::spawn(move || {
@@ -247,7 +251,7 @@ impl Service {
                     s.attempt == attempt && matches!(s.status, Status::Failed(_)) && s.tun.is_some()
                 };
                 if let (true, Some(key)) = (again, key) {
-                    start(key);
+                    start(key, "kill switch retry");
                 }
             });
             return None;
@@ -323,7 +327,7 @@ pub fn set_policy(policy: NetworkPolicy) {
         s.wanted_switch()
     };
     if let Some(key) = switch {
-        start(key);
+        start(key, "app rules");
     }
 }
 
@@ -361,7 +365,7 @@ pub fn connect(chosen: Option<String>) {
         s.target().map(String::from).or(chosen)
     };
     match key {
-        Some(key) => start(key),
+        Some(key) => start(key, "connect"),
         None => {
             let mut s = lock();
             s.status = Status::Failed("Выберите сервер".into());
@@ -392,7 +396,7 @@ pub fn switch_if_connected(key: &str) {
         s.active() && s.server.as_deref() != Some(key)
     };
     if go {
-        start(key.to_string());
+        start(key.to_string(), "server picked");
     }
 }
 
@@ -406,7 +410,7 @@ pub fn reconnect() {
         s.server.clone()
     };
     if let Some(key) = key {
-        start(key);
+        start(key, "reconnect");
     }
 }
 
@@ -418,8 +422,35 @@ pub fn switch_to(key: &str) {
         s.active() && s.server.as_deref() != Some(key)
     };
     if go {
-        start(key.to_string());
+        start(key.to_string(), "switch (failover or hand pick)");
     }
+}
+
+/// «Режим работы» changed. Between VPN and the proxy alone the service
+/// starts again (a TUN comes or goes); otherwise xray restarts with the new
+/// listeners, and the TUN's routes follow the hotspot proxy.
+pub fn set_tunnel_mode(vpn_changed: bool) {
+    let key = {
+        let s = lock();
+        if !s.active() {
+            return;
+        }
+        s.server.clone()
+    };
+    let Some(key) = key else { return };
+    if !vpn_changed {
+        rebuild_tun();
+        return start(key, "mode changed");
+    }
+    disconnect();
+    std::thread::spawn(move || {
+        // The old service lets go of its TUN first.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while lock().tun.is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        start(key, "mode changed");
+    });
 }
 
 pub fn disconnect() {
@@ -438,7 +469,8 @@ pub fn disconnect() {
     }
 }
 
-fn start(key: String) {
+fn start(key: String, why: &str) {
+    crate::diag::log(format!("start: {why}"));
     let (attempt, host) = {
         let mut s = lock();
         let Some(host) = s.host.clone() else { return };
@@ -490,8 +522,13 @@ fn launch(attempt: u64) {
         old.stop_wait(Duration::from_millis(1500));
     }
     let (Some(host), Some(fd)) = (host, tun) else { return };
-    // The desktop preview has no TUN: it only pretends to connect.
-    let result = if fd < 0 { Ok(None) } else { tunnel::spawn(&host.paths(), fd, move |exit| on_xray_exit(attempt, exit)).map(Some) };
+    let on_exit = move |exit| on_xray_exit(attempt, exit);
+    let result = match fd {
+        NO_TUN => tunnel::spawn(&host.paths(), None, on_exit).map(Some),
+        // The desktop preview has no TUN: it only pretends to connect.
+        fd if fd < 0 => Ok(None),
+        fd => tunnel::spawn(&host.paths(), Some(fd), on_exit).map(Some),
+    };
     let mut s = lock();
     if s.attempt != attempt {
         if let Ok(Some(x)) = result {
@@ -506,6 +543,9 @@ fn launch(attempt: u64) {
             s.status = Status::On;
             s.notify();
         }
+        // The TUN was replaced while this one was being handed over (its old
+        // descriptor may be closed already): the new one's launch follows.
+        Err(e) if s.tun != Some(fd) => log::info!("launch on a replaced TUN: {e:#}"),
         Err(e) => {
             let platform = s.fail("connect_failed", format!("{e:#}"));
             drop(s);
@@ -563,7 +603,7 @@ pub fn on_tun_up(fd: RawFd) -> bool {
     let attempt = {
         let mut s = lock();
         let Some(host) = s.host.clone() else { return false };
-        if fd >= 0 && s.link.is_none() {
+        if (fd >= 0 || fd == NO_TUN) && s.link.is_none() {
             // Started by the system with nothing connected in this process:
             // always-on VPN, or Android restarting the app (a permission
             // changed). A fresh config for the server it was on (or the
@@ -584,6 +624,13 @@ pub fn on_tun_up(fd: RawFd) -> bool {
                 _ => return false,
             }
         }
+        // Android hands the same TUN again when the service is started while
+        // it is up: the xray already on it stays.
+        if s.tun == Some(fd) && s.xray.is_some() && s.status == Status::On {
+            crate::diag::log("tun up again, xray kept");
+            return true;
+        }
+        crate::diag::log(if s.tun.is_some() { "tun up: replaced" } else { "tun up" });
         s.tun = Some(fd);
         if !s.active() {
             // Started by the system (always-on VPN): run the last config.
@@ -662,7 +709,7 @@ pub fn on_network(net: NetworkEnv) {
         s.wanted_switch()
     };
     if let Some(key) = switch {
-        start(key);
+        start(key, "network rule");
     }
 }
 
@@ -676,7 +723,8 @@ fn write_config(host: &Host, key: &str) -> Result<Link> {
         log::warn!("routing: {warning}");
     }
     let mut config = mobile_config(rt.config);
-    crate::share::add_inbounds(&mut config, &MobileSettings::load(&host.settings()).share);
+    let mobile = MobileSettings::load(&host.settings());
+    crate::share::add_inbounds(&mut config, &mobile.share, mobile.tunnel);
     let run = host.run_dir();
     std::fs::create_dir_all(&run)?;
     // A new name each time: the xray being replaced removes its own socket

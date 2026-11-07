@@ -247,6 +247,8 @@ export global AppState {
     in property <bool> kill-switch;
     in property <int> failover-secs: 15;
     // «Доступ через хотспот».
+    // «Режим работы»: 0 VPN, 1 VPN + прокси, 2 прокси без VPN.
+    in property <int> tunnel-mode;
     in property <bool> share-enabled;
     in property <bool> share-auth: true;
     in property <string> share-user;
@@ -311,6 +313,7 @@ export global Actions {
     callback request-local-network();
     callback filter-picker(string);
     callback set-failover-secs(int);
+    callback set-tunnel-mode(int);
     callback set-share(bool);
     callback set-share-auth(bool);
     callback new-share-password();
@@ -2181,35 +2184,56 @@ component SettingsPage inherits Rectangle {
                     padding-left: 6px;
                     padding-top: 6px;
                     SectionLabel {
-                        text: "ДРУГИЕ УСТРОЙСТВА";
+                        text: "РЕЖИМ РАБОТЫ";
                     }
                 }
                 Card {
                     VerticalLayout {
                         padding: 12px;
                         spacing: 14px;
-                        ToggleRow {
+                        Rectangle {
+                            border-radius: 11px;
+                            background: Theme.fg.with-alpha(0.05);
+                            HorizontalLayout {
+                                padding: 3px;
+                                spacing: 3px;
+                                for mode[i] in ["VPN", "VPN + прокси", "Прокси"]: Segment {
+                                    text: mode;
+                                    active: AppState.tunnel-mode == i;
+                                    clicked => {
+                                        Actions.set-tunnel-mode(i);
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: AppState.tunnel-mode == 0 ? "Весь трафик телефона идёт через VPN." : AppState.tunnel-mode == 1 ? "VPN, и рядом SOCKS5/HTTP-прокси: для приложений, которым его указывают, и для других устройств через хотспот." : "Без VPN: только SOCKS5/HTTP-прокси, через него идут приложения, где он указан. Работает вместе с другим VPN, например Tailscale.";
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        if AppState.tunnel-mode != 0: ToggleRow {
                             title: "Доступ через хотспот";
-                            hint: "Телефон становится SOCKS5 и HTTP-прокси для устройств в той же Wi-Fi сети или на его точке доступа: укажите прокси в их настройках сети. Работает, пока VPN подключён.";
+                            hint: "Прокси открыт для устройств в той же Wi-Fi сети или на точке доступа телефона: укажите его в их настройках сети." + (AppState.tunnel-mode == 1 ? " Локальная сеть идёт мимо VPN." : "") + " Выключено: только приложения на телефоне.";
                             checked: AppState.share-enabled;
                             toggled(on) => {
                                 Actions.set-share(on);
                             }
                         }
-                        if AppState.share-enabled: Text {
+                        if AppState.tunnel-mode != 0: Text {
                             text: AppState.share-addresses;
                             font-family: "monospace";
                             font-size: Theme.fs-small;
                             color: Theme.fg;
                             wrap: word-wrap;
                         }
-                        if AppState.share-enabled && !AppState.local-network: Text {
+                        if AppState.tunnel-mode != 0 && AppState.share-enabled && !AppState.local-network: Text {
                             text: "Android не пускает к телефону устройства из сети: разрешите DUORAY доступ к локальной сети.";
                             font-size: Theme.fs-caption;
                             color: Theme.warn;
                             wrap: word-wrap;
                         }
-                        if AppState.share-enabled && !AppState.local-network: HorizontalLayout {
+                        if AppState.tunnel-mode != 0 && AppState.share-enabled && !AppState.local-network: HorizontalLayout {
                             Button {
                                 text: "Разрешить";
                                 primary: true;
@@ -2221,21 +2245,21 @@ component SettingsPage inherits Rectangle {
                                 horizontal-stretch: 1;
                             }
                         }
-                        if AppState.share-enabled: ToggleRow {
+                        if AppState.tunnel-mode != 0: ToggleRow {
                             title: "Логин и пароль";
-                            hint: "Без них прокси может использовать любое устройство в сети и любое приложение на телефоне, в том числе для проверки, включён ли VPN.";
+                            hint: "Без них прокси может использовать любое приложение на телефоне, в том числе чтобы проверить, включён ли VPN, а с хотспотом — любое устройство в сети.";
                             checked: AppState.share-auth;
                             toggled(on) => {
                                 Actions.set-share-auth(on);
                             }
                         }
-                        if AppState.share-enabled && AppState.share-auth: Text {
+                        if AppState.tunnel-mode != 0 && AppState.share-auth: Text {
                             text: AppState.share-user + " / " + AppState.share-pass;
                             font-family: "monospace";
                             font-size: Theme.fs-small;
                             color: Theme.fg;
                         }
-                        if AppState.share-enabled && AppState.share-auth: HorizontalLayout {
+                        if AppState.tunnel-mode != 0 && AppState.share-auth: HorizontalLayout {
                             spacing: 8px;
                             Button {
                                 text: "Скопировать";

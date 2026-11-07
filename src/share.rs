@@ -1,5 +1,6 @@
-//! «Доступ через хотспот»: xray also listens on every interface, SOCKS5 on
-//! the port and HTTP on the next one, so devices on the same Wi-Fi or on the
+//! The proxy of «VPN + прокси» and «Прокси»: SOCKS5 on the port and HTTP on
+//! the next one, on 127.0.0.1 for the phone's apps. «Доступ через хотспот»
+//! puts it on every interface, so devices on the same Wi-Fi or on the
 //! phone's hotspot can set the phone as their proxy and go through its
 //! tunnel. Android does not route tethered devices through a VPN by itself.
 
@@ -7,18 +8,19 @@ use std::net::Ipv4Addr;
 
 use serde_json::{Value, json};
 
-use crate::settings::ShareProxy;
+use crate::settings::{ShareProxy, TunnelMode};
 
 pub const SOCKS_TAG: &str = "share-socks";
 pub const HTTP_TAG: &str = "share-http";
 
-/// Adds the shared inbounds to a mobile config: they take the TUN's
+/// Adds the proxy inbounds to a mobile config: they take the TUN's
 /// sniffing and every rule that names the TUN inbound ("socks"), so they
-/// route the same as the phone's own traffic.
-pub fn add_inbounds(config: &mut Value, share: &ShareProxy) {
-    if !share.enabled {
+/// route the same as the phone's own traffic. «Прокси» drops the TUN.
+pub fn add_inbounds(config: &mut Value, share: &ShareProxy, tunnel: TunnelMode) {
+    if !tunnel.proxy() {
         return;
     }
+    let listen = if share.enabled { "0.0.0.0" } else { "127.0.0.1" };
     let sniffing = config["inbounds"]
         .as_array()
         .and_then(|list| list.iter().find(|i| i["tag"] == "socks"))
@@ -33,13 +35,16 @@ pub fn add_inbounds(config: &mut Value, share: &ShareProxy) {
     let http = if share.auth { json!({ "accounts": account }) } else { json!({}) };
     if let Some(inbounds) = config["inbounds"].as_array_mut() {
         inbounds.push(json!({
-            "tag": SOCKS_TAG, "listen": "0.0.0.0", "port": share.port, "protocol": "socks",
+            "tag": SOCKS_TAG, "listen": listen, "port": share.port, "protocol": "socks",
             "settings": socks, "sniffing": sniffing
         }));
         inbounds.push(json!({
-            "tag": HTTP_TAG, "listen": "0.0.0.0", "port": share.port.saturating_add(1), "protocol": "http",
+            "tag": HTTP_TAG, "listen": listen, "port": share.port.saturating_add(1), "protocol": "http",
             "settings": http, "sniffing": sniffing
         }));
+        if !tunnel.vpn() {
+            inbounds.retain(|i| i["tag"] != "socks");
+        }
     }
     if let Some(rules) = config["routing"]["rules"].as_array_mut() {
         for rule in rules {
@@ -90,6 +95,9 @@ fn shared_interface(name: &str) -> bool {
 
 /// What the settings show: SOCKS5 and HTTP per address, or how to get one.
 pub fn describe(share: &ShareProxy) -> String {
+    if !share.enabled {
+        return format!("SOCKS5 127.0.0.1:{}\nHTTP   127.0.0.1:{}", share.port, share.port.saturating_add(1));
+    }
     let ips = lan_addresses();
     if ips.is_empty() {
         return "Подключите телефон к Wi-Fi или включите точку доступа: здесь появится адрес прокси.".into();
@@ -115,11 +123,11 @@ mod tests {
             "routing": { "rules": [{ "inboundTag": ["socks"], "port": "53" }, { "inboundTag": ["duoray-app"] }, { "domain": ["x"] }] }
         });
         let mut off = base.clone();
-        add_inbounds(&mut off, &share(false, true));
+        add_inbounds(&mut off, &share(true, true), TunnelMode::Vpn);
         assert_eq!(off, base);
 
         let mut c = base.clone();
-        add_inbounds(&mut c, &share(true, true));
+        add_inbounds(&mut c, &share(true, true), TunnelMode::VpnProxy);
         let inbounds = c["inbounds"].as_array().unwrap();
         assert_eq!((inbounds[2]["port"].as_u64(), inbounds[3]["port"].as_u64()), (Some(10808), Some(10809)));
         assert_eq!(inbounds[2]["listen"], "0.0.0.0");
@@ -129,10 +137,18 @@ mod tests {
         assert_eq!(c["routing"]["rules"][0]["inboundTag"], json!(["socks", SOCKS_TAG, HTTP_TAG]));
         assert_eq!(c["routing"]["rules"][1]["inboundTag"], json!(["duoray-app"]));
 
-        let mut open = base;
-        add_inbounds(&mut open, &share(true, false));
+        let mut open = base.clone();
+        add_inbounds(&mut open, &share(true, false), TunnelMode::VpnProxy);
         assert_eq!(open["inbounds"][2]["settings"]["auth"], "noauth");
         assert!(open["inbounds"][3]["settings"].get("accounts").is_none());
+
+        // The phone's own apps only, and no TUN.
+        let mut proxy = base;
+        add_inbounds(&mut proxy, &share(false, true), TunnelMode::Proxy);
+        let tags: Vec<_> = proxy["inbounds"].as_array().unwrap().iter().map(|i| i["tag"].as_str().unwrap()).collect();
+        assert_eq!(tags, ["duoray-app", SOCKS_TAG, HTTP_TAG]);
+        assert_eq!(proxy["inbounds"][1]["listen"], "127.0.0.1");
+        assert_eq!(proxy["inbounds"][1]["sniffing"]["enabled"], true);
     }
 
     #[test]

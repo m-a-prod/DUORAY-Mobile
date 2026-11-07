@@ -12,8 +12,14 @@ import android.service.quicksettings.TileService
 class DuorayTileService : TileService() {
     override fun onStartListening() {
         super.onStartListening()
+        listening = this
         Native.boot(this)
         show()
+    }
+
+    override fun onStopListening() {
+        if (listening === this) listening = null
+        super.onStopListening()
     }
 
     override fun onClick() {
@@ -26,7 +32,7 @@ class DuorayTileService : TileService() {
         }
     }
 
-    private fun show() {
+    fun show() {
         val tile = qsTile ?: return
         val status = ConnectionStatus.current
         tile.state = if (status.active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
@@ -42,5 +48,14 @@ class DuorayTileService : TileService() {
             tile.stateDescription = tile.subtitle
         }
         tile.updateTile()
+    }
+
+    companion object {
+        /**
+         * The tile on screen (the shade is open): a new status is drawn on it
+         * right away. requestListeningState only reaches a tile that is not
+         * listening yet, so a tap left the old state until the shade reopened.
+         */
+        var listening: DuorayTileService? = null
     }
 }

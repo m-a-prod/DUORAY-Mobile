@@ -23,6 +23,9 @@ import java.io.File
 class DuorayVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
 
+    // «Прокси» (no TUN) handed to Rust and running.
+    private var proxyUp = false
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -36,6 +39,16 @@ class DuorayVpnService : VpnService() {
             return START_NOT_STICKY
         }
         showNotification()
+        if (tun == null && tunnelMode(this) == "proxy") {
+            // xray only listens on its proxy ports: no TUN, no VPN.
+            if (proxyUp) return START_STICKY
+            proxyUp = true
+            if (!Native.tunUp(this, NO_TUN)) {
+                shutdown()
+                return START_NOT_STICKY
+            }
+            return START_STICKY
+        }
         val fd = tun ?: establish()
         if (fd == null) {
             // Not allowed to open a VPN (the permission was taken back).
@@ -72,7 +85,7 @@ class DuorayVpnService : VpnService() {
     private fun excludeLan(): Boolean {
         val share = runCatching {
             JSONObject(File(filesDir, "mobile.json").readText()).optJSONObject("share")?.optBoolean("enabled") == true
-        }.getOrDefault(false)
+        }.getOrDefault(false) && tunnelMode(this) != "vpn"
         val lan = runCatching {
             JSONObject(File(filesDir, "store.json").readText())
                 .optJSONObject("settings")?.optJSONObject("routing")?.optJSONObject("simple")?.optBoolean("lan_direct") == true
@@ -106,7 +119,9 @@ class DuorayVpnService : VpnService() {
             val fresh = establish() ?: return@post
             tun = fresh
             Native.tunUp(this, fresh.fd)
-            old.close()
+            // A start already under way may still be handing the old one to
+            // xray: closed a little later, not under its feet.
+            Handler(Looper.getMainLooper()).postDelayed({ old.close() }, 3000)
         }
     }
 
@@ -116,9 +131,12 @@ class DuorayVpnService : VpnService() {
     }
 
     private fun shutdown() {
-        tun?.close()
+        // Rust first: it must not hand a closed descriptor to a new xray.
+        val old = tun
         tun = null
+        proxyUp = false
         Native.tunDown()
+        old?.close()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -127,10 +145,12 @@ class DuorayVpnService : VpnService() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
-        if (tun != null) {
-            tun?.close()
+        val old = tun
+        if (old != null || proxyUp) {
             tun = null
+            proxyUp = false
             Native.tunDown()
+            old?.close()
         }
         super.onDestroy()
     }
@@ -246,6 +266,23 @@ class DuorayVpnService : VpnService() {
 
         // Queries go through the tunnel like any other traffic.
         private const val DNS = "1.1.1.1"
+
+        // src/service.rs NO_TUN: the service runs, xray has no TUN.
+        private const val NO_TUN = -2
+
+        /**
+         * «Режим работы» from mobile.json (src/settings.rs TunnelMode): "vpn",
+         * "vpn_proxy" or "proxy". Files from before it ran the hotspot proxy
+         * next to the VPN.
+         */
+        fun tunnelMode(context: Context): String = runCatching {
+            val json = JSONObject(File(context.filesDir, "mobile.json").readText())
+            val shared = json.optJSONObject("share")?.optBoolean("enabled") == true
+            json.optString("tunnel", if (shared) "vpn_proxy" else "vpn")
+        }.getOrDefault("vpn")
+
+        /** The proxy alone needs no VPN permission. */
+        fun needsConsent(context: Context): Intent? = if (tunnelMode(context) == "proxy") null else VpnService.prepare(context)
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, DuorayVpnService::class.java))

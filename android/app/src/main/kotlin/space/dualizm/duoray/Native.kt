@@ -3,7 +3,6 @@ package space.dualizm.duoray
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -57,6 +56,7 @@ object Native {
         Handler(Looper.getMainLooper()).post {
             ConnectionStatus.current = status
             DuorayVpnService.instance?.refreshNotification()
+            DuorayTileService.listening?.show()
             app?.let { context ->
                 runCatching { TileService.requestListeningState(context, ComponentName(context, DuorayTileService::class.java)) }
             }
@@ -72,7 +72,7 @@ object Native {
     fun startVpnInBackground(@Suppress("UNUSED_PARAMETER") unused: String) {
         val context = app ?: return
         Handler(Looper.getMainLooper()).post {
-            if (VpnService.prepare(context) == null) {
+            if (DuorayVpnService.needsConsent(context) == null) {
                 DuorayVpnService.start(context)
             } else {
                 context.startActivity(

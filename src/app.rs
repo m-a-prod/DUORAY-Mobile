@@ -389,6 +389,7 @@ fn wire(ui: &AppWindow) {
             app.render_settings();
         })
     });
+    a.on_set_tunnel_mode(|code| with_app(|app| app.set_tunnel_mode(crate::settings::TunnelMode::from_code(code))));
     a.on_set_share(|on| with_app(|app| app.edit_share(|s| s.enabled = on)));
     a.on_set_share_auth(|on| with_app(|app| app.edit_share(|s| s.auth = on)));
     a.on_new_share_password(|| with_app(|app| app.edit_share(|s| s.pass = crate::settings::new_password())));
@@ -915,12 +916,13 @@ impl App {
         st.set_failover_secs(self.settings.failover_secs as i32);
         st.set_battery_unrestricted(BATTERY_UNRESTRICTED.load(std::sync::atomic::Ordering::Relaxed));
         let share = &self.settings.share;
+        st.set_tunnel_mode(self.settings.tunnel.code());
         st.set_share_enabled(share.enabled);
         st.set_share_auth(share.auth);
         st.set_share_user(share.user.as_str().into());
         st.set_share_pass(share.pass.as_str().into());
         st.set_local_network(LOCAL_NETWORK.load(std::sync::atomic::Ordering::Relaxed));
-        st.set_share_addresses(if share.enabled { crate::share::describe(share).into() } else { "".into() });
+        st.set_share_addresses(if self.settings.tunnel.proxy() { crate::share::describe(share).into() } else { "".into() });
         st.set_core_label(self.core_label().into());
         st.set_ping_url(p.url.clone().into());
         st.set_ping_proxy_mode(match p.proxy_mode {
@@ -1560,6 +1562,23 @@ impl App {
                 app.render_apps();
             });
         });
+    }
+
+    /// «Режим работы»: VPN, VPN with the proxy, or the proxy alone. A live
+    /// connection moves to the new mode.
+    fn set_tunnel_mode(&mut self, mode: crate::settings::TunnelMode) {
+        let was = self.settings.tunnel;
+        if was == mode {
+            return;
+        }
+        self.settings.tunnel = mode;
+        if self.settings.share.pass.is_empty() {
+            self.settings.share.pass = crate::settings::new_password();
+        }
+        // Saved first: the service reads mobile.json for the TUN and its routes.
+        self.save_settings();
+        self.render_settings();
+        service::set_tunnel_mode(was.vpn() != mode.vpn());
     }
 
     /// «Доступ через хотспот» changed: a live connection restarts with the

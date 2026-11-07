@@ -38,15 +38,63 @@ pub struct MobileSettings {
     /// «Держать подключение»: how long the server may stay silent before
     /// the connection moves to another one.
     pub failover_secs: u32,
-    /// «Доступ через хотспот»: the phone as a proxy for the Wi-Fi or hotspot.
+    /// «Режим работы»: VPN, VPN with a proxy next to it, or the proxy alone.
+    pub tunnel: TunnelMode,
+    /// The proxy of «VPN + прокси» and «Прокси»; «Доступ через хотспот»
+    /// opens it to the Wi-Fi or hotspot.
     pub share: ShareProxy,
 }
 
-/// SOCKS5 on `port` and HTTP on `port + 1`, on every interface, so devices
-/// on the same Wi-Fi or on the phone's hotspot can go through its tunnel.
+/// What the connection gives the phone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelMode {
+    /// Every app's traffic through the VPN.
+    #[default]
+    Vpn,
+    /// The VPN, plus SOCKS5/HTTP for apps that want a proxy and, with
+    /// «Доступ через хотспот», for other devices.
+    VpnProxy,
+    /// SOCKS5/HTTP only, no VPN: it runs next to another VPN (Tailscale, a
+    /// work one), and only the apps set to the proxy use it.
+    Proxy,
+}
+
+impl TunnelMode {
+    pub fn code(self) -> i32 {
+        match self {
+            Self::Vpn => 0,
+            Self::VpnProxy => 1,
+            Self::Proxy => 2,
+        }
+    }
+
+    pub fn from_code(code: i32) -> Self {
+        match code {
+            1 => Self::VpnProxy,
+            2 => Self::Proxy,
+            _ => Self::Vpn,
+        }
+    }
+
+    /// SOCKS5/HTTP listeners in the config.
+    pub fn proxy(self) -> bool {
+        self != Self::Vpn
+    }
+
+    /// A VpnService TUN.
+    pub fn vpn(self) -> bool {
+        self != Self::Proxy
+    }
+}
+
+/// SOCKS5 on `port` and HTTP on `port + 1`: on 127.0.0.1 for the phone's
+/// apps, or on every interface so devices on the same Wi-Fi or on the
+/// phone's hotspot can go through its tunnel too.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShareProxy {
+    /// «Доступ через хотспот»: every interface, not only 127.0.0.1.
     pub enabled: bool,
     /// Login and password asked from the devices.
     pub auth: bool,
@@ -78,6 +126,7 @@ impl Default for MobileSettings {
             failover_secs: 15,
             keep_connected: false,
             kill_switch: false,
+            tunnel: TunnelMode::Vpn,
             share: ShareProxy::default(),
         }
     }
@@ -149,8 +198,13 @@ impl AppRules {
 
 impl MobileSettings {
     pub fn load(path: &Path) -> Self {
-        let mut s: Self = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let raw: Option<serde_json::Value> = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok());
+        let mut s: Self = raw.as_ref().and_then(|v| Self::deserialize(v).ok()).unwrap_or_default();
         s.apps.migrate();
+        // Before «Режим работы» the hotspot proxy ran next to the VPN.
+        if s.share.enabled && raw.is_some_and(|v| v.get("tunnel").is_none()) {
+            s.tunnel = TunnelMode::VpnProxy;
+        }
         s
     }
 
@@ -193,5 +247,20 @@ mod tests {
         let saved = serde_json::to_value(&rules).unwrap();
         assert!(saved.get("packages").is_none());
         assert_eq!(new_password().len(), 12);
+    }
+
+    #[test]
+    fn hotspot_sharing_of_old_files_becomes_vpn_with_proxy() {
+        let dir = std::env::temp_dir().join(format!("duoray-tunnel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mobile.json");
+        std::fs::write(&path, r#"{"share":{"enabled":true}}"#).unwrap();
+        assert_eq!(MobileSettings::load(&path).tunnel, TunnelMode::VpnProxy);
+        std::fs::write(&path, r#"{"share":{"enabled":true},"tunnel":"vpn"}"#).unwrap();
+        assert_eq!(MobileSettings::load(&path).tunnel, TunnelMode::Vpn);
+        std::fs::write(&path, r#"{"tunnel":"proxy"}"#).unwrap();
+        let s = MobileSettings::load(&path);
+        assert!(s.tunnel.proxy() && !s.tunnel.vpn());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

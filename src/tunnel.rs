@@ -81,13 +81,14 @@ impl Xray {
     }
 }
 
-/// Starts xray on `tun_fd`. `on_exit` runs on a waiter thread when xray stops
-/// without [`Xray::stop`].
-pub fn spawn(paths: &Paths, tun_fd: RawFd, on_exit: impl FnOnce(Exit) + Send + 'static) -> Result<Xray> {
+/// Starts xray on `tun_fd`, or with no TUN at all («Прокси»). `on_exit`
+/// runs on a waiter thread when xray stops without [`Xray::stop`].
+pub fn spawn(paths: &Paths, tun_fd: Option<RawFd>, on_exit: impl FnOnce(Exit) + Send + 'static) -> Result<Xray> {
     if !paths.xray.exists() {
         bail!("нет xray: {}", paths.xray.display());
     }
     remove_stale_sockets(&paths.config);
+    let Some(tun_fd) = tun_fd else { return spawn_with(paths, None, on_exit) };
     // A duplicate above stdio for the child; close-on-exec until the child
     // clears it, so other processes started meanwhile do not inherit it.
     // SAFETY: fcntl on a descriptor the platform keeps open while we run.
@@ -95,27 +96,30 @@ pub fn spawn(paths: &Paths, tun_fd: RawFd, on_exit: impl FnOnce(Exit) + Send + '
     if child_fd < 0 {
         return Err(io::Error::last_os_error()).context("копия дескриптора TUN");
     }
-    let result = spawn_with(paths, child_fd, on_exit);
+    let result = spawn_with(paths, Some(child_fd), on_exit);
     // SAFETY: the parent's copy; the child has its own after exec.
     unsafe { libc::close(child_fd) };
     result
 }
 
-fn spawn_with(paths: &Paths, child_fd: RawFd, on_exit: impl FnOnce(Exit) + Send + 'static) -> Result<Xray> {
+fn spawn_with(paths: &Paths, child_fd: Option<RawFd>, on_exit: impl FnOnce(Exit) + Send + 'static) -> Result<Xray> {
     let log = File::create(&paths.log).context("журнал xray")?;
     let mut cmd = xray_command(&paths.xray);
     cmd.args(["run", "-c"])
         .arg(&paths.config)
-        .env("xray.tun.fd", child_fd.to_string())
-        .env("XRAY_TUN_FD", child_fd.to_string())
         .env("XRAY_LOCATION_ASSET", &paths.assets)
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
+    if let Some(fd) = child_fd {
+        cmd.env("xray.tun.fd", fd.to_string()).env("XRAY_TUN_FD", fd.to_string());
+    }
     // SAFETY: only async-signal-safe calls between fork and exec.
     unsafe {
         cmd.pre_exec(move || {
-            if libc::fcntl(child_fd, libc::F_SETFD, 0) < 0 {
+            if let Some(fd) = child_fd
+                && libc::fcntl(fd, libc::F_SETFD, 0) < 0
+            {
                 return Err(io::Error::last_os_error());
             }
             // xray must not outlive the app when the system kills it.
@@ -446,7 +450,7 @@ mod tests {
         let file = File::open("/dev/null").unwrap();
         let fd = std::os::fd::AsRawFd::as_raw_fd(&file);
         let (tx, rx) = std::sync::mpsc::channel();
-        let _x = spawn(&paths, fd, move |e| tx.send(e).unwrap()).unwrap();
+        let _x = spawn(&paths, Some(fd), move |e| tx.send(e).unwrap()).unwrap();
         let exit = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(exit.log_tail.starts_with("open:"), "{}", exit.log_tail);
         std::fs::remove_dir_all(dir).unwrap();

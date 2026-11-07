@@ -11,7 +11,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import android.net.Uri
-import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -157,7 +156,7 @@ class MainActivity : NativeActivity() {
 
     /** Asks for the VPN the first time, then starts it. */
     fun startVpn() = runOnUiThread {
-        val consent = VpnService.prepare(this)
+        val consent = DuorayVpnService.needsConsent(this)
         if (consent == null) DuorayVpnService.start(this) else startActivityForResult(consent, REQUEST_VPN)
     }
 
