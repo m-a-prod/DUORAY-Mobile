@@ -343,6 +343,14 @@ fn wire(ui: &AppWindow) {
     a.on_install_core(|tag| with_app(|app| app.install_core(&tag)));
     a.on_select_core(|tag| with_app(|app| app.select_core(&tag)));
     a.on_remove_core(|tag| with_app(|app| app.remove_core(&tag)));
+    a.on_set_kill_switch(|on| {
+        with_app(|app| {
+            app.settings.kill_switch = on;
+            service::set_kill_switch(on);
+            app.save_settings();
+            app.render_settings();
+        })
+    });
     a.on_set_quiet_notification(|on| {
         with_app(|app| {
             app.settings.quiet_notification = on;
@@ -806,6 +814,8 @@ impl App {
             ),
             Status::Connecting => ("connecting", "Подключение…".into(), self.server_name(server.as_deref())),
             Status::On => ("connected", "Подключено".into(), self.server_name(server.as_deref())),
+            // Kill switch: the VPN holds the network closed.
+            Status::Failed(e) if self.conn.tun => ("blocked", "Интернет закрыт".into(), format!("Kill switch, переподключение… {}", e.lines().next().unwrap_or_default())),
             Status::Failed(e) => ("failed", "Ошибка подключения".into(), e.clone()),
         };
         st.set_conn_state(state.into());
@@ -901,6 +911,7 @@ impl App {
         st.set_background_stats(self.settings.background_stats);
         st.set_live_update(self.settings.live_update);
         st.set_quiet_notification(self.settings.quiet_notification);
+        st.set_kill_switch(self.settings.kill_switch);
         st.set_failover_secs(self.settings.failover_secs as i32);
         st.set_battery_unrestricted(BATTERY_UNRESTRICTED.load(std::sync::atomic::Ordering::Relaxed));
         let share = &self.settings.share;
@@ -1237,6 +1248,8 @@ impl App {
 
     fn toggle(&mut self) {
         match self.conn.status {
+            // Kill switch holding the network: the button lets it go.
+            Status::Failed(_) if self.conn.tun => service::disconnect(),
             Status::Off | Status::Failed(_) => {
                 // Connecting: the check has done its job.
                 if self.pinging {

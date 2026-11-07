@@ -32,6 +32,9 @@ pub struct MobileSettings {
     /// «Держать подключение» (off by default: on a shaky Wi-Fi it moved
     /// people between servers they had not asked for).
     pub keep_connected: bool,
+    /// Kill switch: when the connection breaks the VPN stays up with nothing
+    /// behind it, so apps lose the network instead of going around it.
+    pub kill_switch: bool,
     /// «Держать подключение»: how long the server may stay silent before
     /// the connection moves to another one.
     pub failover_secs: u32,
@@ -74,6 +77,7 @@ impl Default for MobileSettings {
             quiet_notification: false,
             failover_secs: 15,
             keep_connected: false,
+            kill_switch: false,
             share: ShareProxy::default(),
         }
     }

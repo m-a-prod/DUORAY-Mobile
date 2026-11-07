@@ -10,7 +10,7 @@
 use std::net::SocketAddr;
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -149,6 +149,8 @@ pub struct Snapshot {
     pub net: NetworkEnv,
     /// Set while connected.
     pub link: Option<Link>,
+    /// The TUN is open: with the kill switch, also after a failure.
+    pub tun: bool,
 }
 
 pub type Listener = Box<dyn Fn(Snapshot) + Send>;
@@ -192,6 +194,7 @@ impl Service {
             server: self.server.clone(),
             net: self.net.clone(),
             link: (self.status == Status::On).then(|| self.link.clone()).flatten(),
+            tun: self.tun.is_some(),
         }
     }
 
@@ -232,8 +235,32 @@ impl Service {
             x.stop();
         }
         self.notify();
+        // Kill switch: the TUN stays, nothing reads it, so apps get no
+        // network instead of going around the VPN. Only «Отключить» ends it.
+        if KILL_SWITCH.load(Ordering::Relaxed) && self.tun.is_some() {
+            // Tries again every few seconds until it works or «Отключить».
+            let (attempt, key) = (self.attempt, self.server.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(5));
+                let again = {
+                    let s = lock();
+                    s.attempt == attempt && matches!(s.status, Status::Failed(_)) && s.tun.is_some()
+                };
+                if let (true, Some(key)) = (again, key) {
+                    start(key);
+                }
+            });
+            return None;
+        }
         self.tun.is_some().then(|| self.platform.clone()).flatten()
     }
+}
+
+/// MobileSettings::kill_switch.
+static KILL_SWITCH: AtomicBool = AtomicBool::new(false);
+
+pub fn set_kill_switch(on: bool) {
+    KILL_SWITCH.store(on, Ordering::Relaxed);
 }
 
 /// Called by the shell before anything else. Only the first call in a
@@ -251,6 +278,7 @@ pub fn init(host: Host) {
         crate::status::set_background_stats(settings.background_stats);
         crate::status::set_live_update(settings.live_update);
         crate::status::set_quiet(settings.quiet_notification);
+        set_kill_switch(settings.kill_switch);
         tunnel::select_core(settings.core.as_deref().map(|tag| crate::core::executable(&host.data, tag)));
         s.policy = settings.policy;
         s.apps = settings.apps;

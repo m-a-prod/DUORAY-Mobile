@@ -244,6 +244,7 @@ export global AppState {
     // Android leaves DUORAY alone in the background (battery optimization off).
     in property <bool> battery-unrestricted: true;
     in property <bool> quiet-notification;
+    in property <bool> kill-switch;
     in property <int> failover-secs: 15;
     // «Доступ через хотспот».
     in property <bool> share-enabled;
@@ -305,6 +306,7 @@ export global Actions {
     callback set-background-stats(bool);
     callback set-live-update(bool);
     callback set-quiet-notification(bool);
+    callback set-kill-switch(bool);
     callback request-background();
     callback request-local-network();
     callback filter-picker(string);
@@ -1027,7 +1029,7 @@ component ConnectionCard inherits Rectangle {
     property <string> state: AppState.conn-state;
     property <bool> on: root.state == "connected";
     property <bool> has-exit: root.on && AppState.conn-exit-text != "";
-    property <color> tone: root.on ? Theme.ok : root.state == "failed" ? Theme.danger : root.state == "idle" ? Theme.line : Theme.warn;
+    property <color> tone: root.on ? Theme.ok : root.state == "failed" || root.state == "blocked" ? Theme.danger : root.state == "idle" ? Theme.line : Theme.warn;
     border-radius: 20px;
     background: Theme.card.with-alpha(0.97);
     border-width: 1px;
@@ -1083,7 +1085,7 @@ component ConnectionCard inherits Rectangle {
             if (root.on ? AppState.conn-server : AppState.conn-detail) != "": Text {
                 text: root.on ? AppState.conn-server + (AppState.conn-ping-text != "" ? " · " + AppState.conn-ping-text : "") : AppState.conn-detail;
                 font-size: Theme.fs-caption;
-                color: root.state == "failed" ? Theme.danger : Theme.muted;
+                color: root.state == "failed" || root.state == "blocked" ? Theme.danger : Theme.muted;
                 overflow: elide;
             }
             if root.on && AppState.conn-traffic != "": Text {
@@ -1098,9 +1100,9 @@ component ConnectionCard inherits Rectangle {
             Button {
                 height: 40px;
                 preferred-width: self.min-width;
-                text: root.on ? "Отключить" : root.state == "connecting" ? "Отменить" : "Подключить";
-                primary: !root.on;
-                enabled: root.on || root.state == "connecting" || AppState.can-connect;
+                text: root.on || root.state == "blocked" ? "Отключить" : root.state == "connecting" ? "Отменить" : "Подключить";
+                primary: !root.on && root.state != "blocked";
+                enabled: root.on || root.state == "connecting" || root.state == "blocked" || AppState.can-connect;
                 clicked => {
                     Actions.toggle-connection();
                 }
@@ -2067,6 +2069,14 @@ component SettingsPage inherits Rectangle {
                                 Rectangle {
                                     horizontal-stretch: 1;
                                 }
+                            }
+                        }
+                        ToggleRow {
+                            title: "Kill switch";
+                            hint: "Если подключение оборвалось, интернет пропадает, а не идёт мимо VPN. Вернуть его: «Подключить» или «Отключить». Если Android выгрузит само приложение, защитит только системное «Блокировать соединения без VPN» в настройках постоянного VPN ниже.";
+                            checked: AppState.kill-switch;
+                            toggled(on) => {
+                                Actions.set-kill-switch(on);
                             }
                         }
                         VerticalLayout {
