@@ -19,11 +19,14 @@ pub struct MobileSettings {
     /// Ping threads on mobile data (store.json's count is for Wi-Fi):
     /// operators throttle bursts of new connections.
     pub mobile_ping_threads: u32,
+    /// The connection as a Live Update (Android 16+): pinned on top of the
+    /// shade with a chip in the status bar. Off: a plain quiet notification.
+    pub live_update: bool,
 }
 
 impl Default for MobileSettings {
     fn default() -> Self {
-        Self { policy: NetworkPolicy::default(), apps: AppRules::default(), background_stats: true, mobile_ping_threads: 1 }
+        Self { policy: NetworkPolicy::default(), apps: AppRules::default(), background_stats: true, mobile_ping_threads: 1, live_update: true }
     }
 }
 

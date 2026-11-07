@@ -308,6 +308,14 @@ fn wire(ui: &AppWindow) {
             app.render_settings();
         })
     });
+    a.on_set_live_update(|on| {
+        with_app(|app| {
+            app.settings.live_update = on;
+            crate::status::set_live_update(on);
+            app.save_settings();
+            app.render_settings();
+        })
+    });
     a.on_set_background_stats(|on| {
         with_app(|app| {
             app.settings.background_stats = on;
@@ -806,6 +814,7 @@ impl App {
         st.set_ping_threads(p.threads as i32);
         st.set_mobile_ping_threads(self.settings.mobile_ping_threads as i32);
         st.set_background_stats(self.settings.background_stats);
+        st.set_live_update(self.settings.live_update);
         st.set_ping_url(p.url.clone().into());
         st.set_ping_proxy_mode(match p.proxy_mode {
             ProxyPingMode::Default => 0,

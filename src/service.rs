@@ -236,6 +236,7 @@ pub fn init(host: Host) {
         tunnel::kill_orphan(&paths.pid);
         let settings = MobileSettings::load(&host.settings());
         crate::status::set_background_stats(settings.background_stats);
+        crate::status::set_live_update(settings.live_update);
         s.policy = settings.policy;
         s.apps = settings.apps;
         // Daily geoip (ru, ru-whitelist), weekly whitelist and game lists.

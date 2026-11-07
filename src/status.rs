@@ -34,8 +34,17 @@ pub struct Notice {
 impl Notice {
     /// One string over JNI: fields joined with U+001F.
     pub fn pack(&self) -> String {
-        [self.state.to_string(), self.title.clone(), self.text.clone(), self.speeds.clone(), self.chip.clone(), self.since_ms.to_string()]
-            .join("\u{1f}")
+        let live = if LIVE_UPDATE.load(Ordering::Relaxed) { "1" } else { "0" };
+        [
+            self.state.to_string(),
+            self.title.clone(),
+            self.text.clone(),
+            self.speeds.clone(),
+            self.chip.clone(),
+            self.since_ms.to_string(),
+            live.to_string(),
+        ]
+        .join("\u{1f}")
     }
 }
 
@@ -69,6 +78,8 @@ pub fn state_code(status: &Status) -> u8 {
 static WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 /// MobileSettings::background_stats.
 static BACKGROUND_STATS: AtomicBool = AtomicBool::new(true);
+/// MobileSettings::live_update.
+static LIVE_UPDATE: AtomicBool = AtomicBool::new(true);
 static SINCE: AtomicI64 = AtomicI64::new(0);
 static LAST: Mutex<Option<Notice>> = Mutex::new(None);
 /// The link the background poller watches: one poller per connection.
@@ -81,6 +92,22 @@ pub fn set_window_open(open: bool) {
 
 pub fn set_background_stats(on: bool) {
     BACKGROUND_STATS.store(on, Ordering::Relaxed);
+}
+
+/// Live Update on or off; the notification changes right away.
+pub fn set_live_update(on: bool) {
+    if LIVE_UPDATE.swap(on, Ordering::Relaxed) == on {
+        return;
+    }
+    let last = LAST.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    // Its own thread: the caller may hold the service lock (service::init).
+    if let Some(notice) = last {
+        std::thread::spawn(move || {
+            if let Some(p) = service::platform() {
+                p.show_status(&notice.pack());
+            }
+        });
+    }
 }
 
 pub fn window_open() -> bool {

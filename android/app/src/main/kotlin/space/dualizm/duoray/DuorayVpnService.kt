@@ -168,7 +168,7 @@ class DuorayVpnService : VpnService() {
         } else {
             builder.setShowWhen(false)
         }
-        if (status.state == 2) {
+        if (status.state == 2 && status.promote) {
             builder.setRequestPromotedOngoing(true)
             builder.setShortCriticalText(status.chip.ifEmpty { "VPN" })
         }

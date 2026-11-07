@@ -187,6 +187,7 @@ export global AppState {
     in property <int> ping-threads: 8;
     in property <int> mobile-ping-threads: 1;
     in property <bool> background-stats: true;
+    in property <bool> live-update: true;
     // Reading Wi-Fi names: 0 no location access, 1 approximate only,
     // 2 precise but location off, 3 readable.
     in property <int> wifi-access: 3;
@@ -272,6 +273,7 @@ export global Actions {
     callback set-ping-threads(int);
     callback set-mobile-ping-threads(int);
     callback set-background-stats(bool);
+    callback set-live-update(bool);
     // Whether the window takes the system Back (src/platform: predictive back).
     callback back-state(bool);
     callback open-settings(string);
@@ -2000,6 +2002,14 @@ component SettingsPage inherits Rectangle {
                     VerticalLayout {
                         padding: 12px;
                         spacing: 14px;
+                        ToggleRow {
+                            title: "Закреплять в шторке";
+                            hint: "Android 16 и новее: подключение висит наверху шторки и значком в строке состояния (Live Update). Выключите, если мешает: останется обычное тихое уведомление.";
+                            checked: AppState.live-update;
+                            toggled(on) => {
+                                Actions.set-live-update(on);
+                            }
+                        }
                         ToggleRow {
                             title: "Скорость в шторке в фоне";
                             hint: "Пока приложение закрыто, уведомление показывает скорость и страну выхода: DUORAY раз в 3 секунды спрашивает счётчики у xray. Выключите, чтобы беречь батарею.";

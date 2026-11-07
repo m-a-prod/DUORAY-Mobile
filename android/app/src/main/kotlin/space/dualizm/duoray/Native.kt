@@ -123,16 +123,18 @@ data class ConnectionStatus(
     val chip: String,
     /** When the connection came up, Unix ms; 0 unknown. */
     val sinceMs: Long,
+    /** Ask to be a Live Update (the setting «Закреплять в шторке»). */
+    val promote: Boolean,
 ) {
     val active: Boolean get() = state == 1 || state == 2
 
     companion object {
-        var current = ConnectionStatus(0, "Не подключено", "", "", "", 0)
+        var current = ConnectionStatus(0, "Не подключено", "", "", "", 0, true)
 
         fun parse(packed: String): ConnectionStatus {
             val f = packed.split('\u001f')
             fun at(i: Int) = f.getOrElse(i) { "" }
-            return ConnectionStatus(at(0).toIntOrNull() ?: 0, at(1), at(2), at(3), at(4), at(5).toLongOrNull() ?: 0)
+            return ConnectionStatus(at(0).toIntOrNull() ?: 0, at(1), at(2), at(3), at(4), at(5).toLongOrNull() ?: 0, at(6) != "0")
         }
     }
 }
