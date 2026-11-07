@@ -45,6 +45,8 @@ struct App {
     /// Servers "Держать подключение" already moved away from.
     failover_tried: HashSet<String>,
     ticks: u32,
+    /// The server open in the editor: (subscription id, server index).
+    editing: Option<(String, usize)>,
     refreshing: HashSet<String>,
     conn: Snapshot,
     traffic: Option<Traffic>,
@@ -109,6 +111,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         live_failures: 0,
         failover_tried: HashSet::new(),
         ticks: 0,
+        editing: None,
         refreshing: HashSet::new(),
         conn: service::snapshot(),
         traffic: None,
@@ -355,6 +358,17 @@ fn wire(ui: &AppWindow) {
         })
     });
     a.on_connect_fastest(|| with_app(App::connect_fastest));
+    a.on_open_server(|row| with_app(|app| app.open_server(row as usize)));
+    a.on_save_server(|text| with_app(|app| app.save_server(&text)));
+    a.on_reset_server(|| with_app(App::reset_server));
+    a.on_copy_text(|text| {
+        with_app(|app| {
+            if let Some(p) = service::platform() {
+                p.copy_text(&text);
+                app.toast("Скопировано".into());
+            }
+        })
+    });
     a.on_show_qr(|| {
         with_app(|app| {
             let Some(ui) = app.ui() else { return };
@@ -914,6 +928,81 @@ impl App {
         if let Some(ui) = self.ui() {
             ui.global::<AppState>().set_add_prefill(url.into());
             ui.invoke_open_add();
+        }
+    }
+
+    /// Opens the editor on the row's server.
+    fn open_server(&mut self, row: usize) {
+        let (Some(sub), Some(&index)) = (self.sub(), self.order.get(row)) else { return };
+        let Some(ui) = self.ui() else { return };
+        let s = &sub.servers[index];
+        let st = ui.global::<AppState>();
+        st.set_edit_name(display_name(&s.name).1.into());
+        st.set_edit_meta(format!("{} · {}:{} · {}", s.protocol, s.address, s.port, s.network).into());
+        st.set_edit_json(serde_json::to_string_pretty(&s.config_json()).unwrap_or_default().into());
+        st.set_edit_error("".into());
+        st.set_edit_edited(s.override_key.is_some());
+        self.editing = Some((sub.id.clone(), index));
+        ui.invoke_open_server_page();
+    }
+
+    fn save_server(&mut self, text: &str) {
+        let Some((id, index)) = self.editing.clone() else { return };
+        let Some(ui) = self.ui() else { return };
+        if text == ui.global::<AppState>().get_edit_json().as_str() {
+            ui.invoke_close_server_page();
+            return;
+        }
+        let mut edited = match Server::from_json_text(text) {
+            Ok(s) => s,
+            Err(e) => {
+                ui.global::<AppState>().set_edit_error(format!("Строка {}, столбец {}: {}", e.line, e.column, e.message).into());
+                return;
+            }
+        };
+        let Some(old_key) = self.server_key(&id, index) else { return };
+        if edited.name.trim().is_empty() {
+            edited.name = self.store.get(&id).map(|sub| sub.servers[index].name.clone()).unwrap_or_default();
+        }
+        if self.store.edit_server(&id, index, edited) {
+            self.server_changed(&id, index, old_key, "Сервер изменён");
+        }
+    }
+
+    fn reset_server(&mut self) {
+        let Some((id, index)) = self.editing.clone() else { return };
+        let Some(old_key) = self.server_key(&id, index) else { return };
+        if self.store.reset_server(&id, index) {
+            self.server_changed(&id, index, old_key, "Вернули версию подписки");
+        }
+    }
+
+    fn server_key(&self, id: &str, index: usize) -> Option<String> {
+        let sub = self.store.get(id)?;
+        sub.servers.get(index).map(|s| servers::key_of(sub, s))
+    }
+
+    /// After an edit or a reset: the remembered server follows the edited one
+    /// (its key may have changed), its stale ping goes, a live tunnel restarts.
+    fn server_changed(&mut self, id: &str, index: usize, old_key: String, msg: &str) {
+        let Some(new_key) = self.server_key(id, index) else { return };
+        if self.store.settings.last_server.as_deref() == Some(old_key.as_str()) {
+            self.store.settings.last_server = Some(new_key.clone());
+        }
+        self.pings.remove(&old_key);
+        self.editing = None;
+        self.save_store();
+        self.render_all();
+        if let Some(ui) = self.ui() {
+            ui.invoke_close_server_page();
+        }
+        self.toast(msg.into());
+        if self.conn.server.as_deref() == Some(old_key.as_str()) {
+            if new_key == old_key {
+                service::reconnect();
+            } else {
+                service::switch_to(&new_key);
+            }
         }
     }
 

@@ -2,7 +2,7 @@
 // crates/duoray-gui/ui/app.slint): the same theme palettes, header card,
 // server rows and connection card. The desktop sidebar is a drawer here.
 
-import { Palette, Spinner } from "std-widgets.slint";
+import { Palette, Spinner, TextEdit } from "std-widgets.slint";
 // Noto Sans, the face the desktop app shows on Linux (OFL, ui/fonts/OFL.txt).
 import "fonts/NotoSans-Regular.ttf";
 import "fonts/NotoSans-Medium.ttf";
@@ -212,6 +212,12 @@ export global AppState {
     in property <string> add-prefill;
     // The shown subscription's link as a QR code.
     in property <image> qr-image;
+    // The server editor.
+    in property <string> edit-name;
+    in property <string> edit-meta;
+    in property <string> edit-json;
+    in-out property <string> edit-error;
+    in property <bool> edit-edited;
     in property <bool> expiry-can-renew;
 }
 
@@ -266,6 +272,10 @@ export global Actions {
     callback load-log();
     callback connect-fastest();
     callback show-qr();
+    callback open-server(int);
+    callback save-server(string);
+    callback reset-server();
+    callback copy-text(string);
     callback scan-qr();
     callback copy-link();
     callback renew();
@@ -644,6 +654,7 @@ component ServerItem inherits Rectangle {
     callback clicked();
     callback long-pressed();
     callback remove();
+    callback open();
     property <bool> marked: root.show-selection && root.server.selected;
     // Inside the subscription card: a radio shows the choice, no fill.
     in property <bool> radio;
@@ -748,6 +759,20 @@ component ServerItem inherits Rectangle {
                 text: root.server.ping-text;
                 level: root.server.ping-level;
                 width: 62px * Theme.text-scale;
+            }
+        }
+        if root.radio: Rectangle {
+            width: 28px;
+            Image {
+                source: Icons.chevron;
+                width: 20px;
+                height: 20px;
+                colorize: Theme.muted;
+            }
+            TouchArea {
+                clicked => {
+                    root.open();
+                }
             }
         }
         if root.manual: VerticalLayout {
@@ -2302,6 +2327,76 @@ component SubMenuSheet inherits Rectangle {
     }
 }
 
+// A server's own page: its xray config as JSON, editable (the desktop's
+// server editor in JSON mode). An edit sticks across subscription updates.
+component ServerPage inherits Rectangle {
+    in property <length> bottom-inset;
+    callback back();
+    background: Theme.bg;
+    TouchArea { }
+    VerticalLayout {
+        PageHeader {
+            text: AppState.edit-name;
+            back => {
+                root.back();
+            }
+        }
+        VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-bottom: root.bottom-inset + 10px;
+            spacing: 8px;
+            Text {
+                text: AppState.edit-meta;
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                overflow: elide;
+            }
+            json := TextEdit {
+                vertical-stretch: 1;
+                text: AppState.edit-json;
+                wrap: char-wrap;
+                font-size: 12px;
+                edited => {
+                    AppState.edit-error = "";
+                }
+            }
+            if AppState.edit-error != "": Text {
+                text: AppState.edit-error;
+                font-size: Theme.fs-caption;
+                color: Theme.danger;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Скопировать";
+                    clicked => {
+                        Actions.copy-text(json.text);
+                    }
+                }
+                if AppState.edit-edited: Button {
+                    text: "Вернуть";
+                    danger: true;
+                    clicked => {
+                        Actions.reset-server();
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: "Сохранить";
+                    primary: true;
+                    clicked => {
+                        Actions.save-server(json.text);
+                    }
+                }
+            }
+        }
+    }
+}
+
 // "Подмена HWID": how the shown subscription identifies itself to its panel.
 component IdentitySheet inherits Rectangle {
     in property <length> bottom-inset;
@@ -2471,6 +2566,15 @@ export component AppWindow inherits Window {
     in-out property <bool> sub-menu;
     in-out property <bool> identity-open;
     in-out property <bool> qr-open;
+    in-out property <bool> server-open;
+    callback open-server-page();
+    open-server-page => {
+        root.server-open = true;
+    }
+    callback close-server-page();
+    close-server-page => {
+        root.server-open = false;
+    }
     callback open-qr();
     open-qr => {
         root.qr-open = true;
@@ -2507,6 +2611,8 @@ export component AppWindow inherits Window {
                 root.picking = -1;
             } else if (root.confirm-remove) {
                 root.confirm-remove = false;
+            } else if (root.server-open) {
+                root.server-open = false;
             } else if (root.apps-open) {
                 root.apps-open = false;
             } else if (root.page != 0) {
@@ -2604,6 +2710,9 @@ export component AppWindow inherits Window {
                                         long-pressed => {
                                             Actions.ping-server(i);
                                         }
+                                        open => {
+                                            Actions.open-server(i);
+                                        }
                                         remove => {
                                             Actions.remove-server(i);
                                         }
@@ -2665,10 +2774,18 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.page == 0 && !root.apps-open: ConnectionCard {
+    if root.page == 0 && !root.apps-open && !root.server-open: ConnectionCard {
         x: 12px + root.safe-area-insets.left;
         width: parent.width - 24px - root.safe-area-insets.left - root.safe-area-insets.right;
         y: parent.height - (64px + max(root.bottom, 8px)) - self.height - 10px;
+    }
+    if root.server-open: ServerPage {
+        y: root.top;
+        height: parent.height - root.top;
+        bottom-inset: root.bottom;
+        back => {
+            root.server-open = false;
+        }
     }
     if root.apps-open: AppsPage {
         y: root.top;

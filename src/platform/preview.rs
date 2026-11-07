@@ -2,7 +2,7 @@
 //! phone: subscriptions and pings are real, the VPN only pretends.
 //!
 //! `DUORAY_PREVIEW_DATA` picks the data directory, `DUORAY_PAGE` the page to
-//! open (0..2), and `DUORAY_SHOT=file.png` saves a screenshot and quits.
+//! open (0..2, or 3 for the first server's editor), and `DUORAY_SHOT=file.png` saves a screenshot and quits.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,7 +68,16 @@ pub fn main() -> Result<()> {
     let shot = std::env::var_os("DUORAY_SHOT").map(PathBuf::from);
     crate::app::run(|ui| {
         ui.window().set_size(slint::LogicalSize::new(412.0, 892.0));
-        ui.set_page(page);
+        if page == 3 {
+            let weak = ui.as_weak();
+            slint::Timer::single_shot(Duration::from_millis(300), move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.global::<crate::Actions>().invoke_open_server(0);
+                }
+            });
+        } else {
+            ui.set_page(page);
+        }
         let Some(path) = shot else { return };
         let weak = ui.as_weak();
         slint::Timer::single_shot(Duration::from_millis(2500), move || {
