@@ -1,9 +1,11 @@
 #!/bin/sh
 # Publishes a DUORAY for Android release to the update hub.
 #
-#   scripts/release.sh [--no-build] ["Что нового: ..."]
+#   scripts/release.sh [--no-build | --from-github <tag>] ["Что нового: ..."]
 #
 # --no-build publishes the APKs built last time (dist/release-<version>/).
+# --from-github takes the unsigned APKs .github/workflows/release.yml built
+# for <tag>, signs them here, publishes the GitHub release and the hub.
 #
 # Builds one APK per ABI (arm64-v8a, x86_64), signed with the release key,
 # and adds them as the `android` section of the hub's signed manifest, next
@@ -17,7 +19,9 @@ set -eu
 cd "$(dirname "$0")/.."
 
 BUILD=1
+FROM_TAG=
 if [ "${1:-}" = "--no-build" ]; then BUILD=0; shift; fi
+if [ "${1:-}" = "--from-github" ]; then BUILD=0; FROM_TAG=${2:?tag}; shift 2; fi
 NOTES=${1:-}
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 BUILD_ID=$(git rev-parse --short=12 HEAD)
@@ -47,6 +51,21 @@ fi
 export DUORAY_KEYSTORE_PASSWORD
 
 OUT=dist/release-$VERSION
+if [ -n "$FROM_TAG" ]; then
+    [ "$FROM_TAG" = "v$VERSION" ] || { echo "tag $FROM_TAG does not match version $VERSION" >&2; exit 1; }
+    [ "$(git rev-parse --short=12 "$FROM_TAG^{commit}")" = "$BUILD_ID" ] || {
+        echo "check out $FROM_TAG first: the manifest names the commit the builds came from" >&2; exit 1; }
+    : "${ANDROID_HOME:?set ANDROID_HOME (apksigner comes from its build-tools)}"
+    APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+    rm -rf "$OUT" && mkdir -p "$OUT"
+    gh release download "$FROM_TAG" -R m-a-prod/DUORAY-Mobile -D "$OUT" -p "*-unsigned.apk"
+    for abi in arm64-v8a x86_64; do
+        "$APKSIGNER" sign --ks "$DUORAY_KEYSTORE" --ks-key-alias duoray --ks-pass env:DUORAY_KEYSTORE_PASSWORD \
+            --out "$OUT/DUORAY-$VERSION-$abi.apk" "$OUT/DUORAY-$VERSION-$abi-unsigned.apk"
+        "$APKSIGNER" verify "$OUT/DUORAY-$VERSION-$abi.apk"
+        rm -f "$OUT/DUORAY-$VERSION-$abi-unsigned.apk" "$OUT/DUORAY-$VERSION-$abi.apk.idsig"
+    done
+fi
 if [ "$BUILD" = 1 ]; then
     # versionCode grows with the version: 1.2.3 -> 10203.
     CODE=$(echo "$VERSION" | awk -F'[.-]' '{ print $1 * 10000 + $2 * 100 + $3 }')
@@ -108,4 +127,17 @@ done
 scp -q "$OUT/manifest.json" "$HUB:$REMOTE/manifest.json.new"
 scp -q "$OUT/manifest.sig" "$HUB:$REMOTE/manifest.sig.new"
 ssh "$HUB" "cd $REMOTE && chmod -R a+rX files; chmod 644 manifest.*.new && mv manifest.sig.new manifest.sig && mv manifest.json.new manifest.json"
+if [ -n "$FROM_TAG" ]; then
+    # The signed APKs replace the unsigned ones; the draft goes public.
+    (cd "$OUT" && sha256sum DUORAY-"$VERSION"-*.apk > SHA256SUMS)
+    gh release upload "$FROM_TAG" -R m-a-prod/DUORAY-Mobile "$OUT"/DUORAY-"$VERSION"-*.apk "$OUT/SHA256SUMS" --clobber
+    for abi in arm64-v8a x86_64; do
+        gh release delete-asset "$FROM_TAG" "DUORAY-$VERSION-$abi-unsigned.apk" -R m-a-prod/DUORAY-Mobile -y 2>/dev/null || true
+    done
+    if [ -n "$NOTES" ]; then
+        gh release edit "$FROM_TAG" -R m-a-prod/DUORAY-Mobile --draft=false --notes "$NOTES"
+    else
+        gh release edit "$FROM_TAG" -R m-a-prod/DUORAY-Mobile --draft=false
+    fi
+fi
 echo "published Android $VERSION ($BUILD_ID)"

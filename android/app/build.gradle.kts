@@ -44,7 +44,13 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName(if (keystore != null) "release" else "debug")
+            // DUORAY_UNSIGNED=1 (the release workflow): left unsigned, for
+            // scripts/release.sh --from-github to sign on the release machine.
+            signingConfig = when {
+                System.getenv("DUORAY_UNSIGNED") == "1" -> null
+                keystore != null -> signingConfigs.getByName("release")
+                else -> signingConfigs.getByName("debug")
+            }
         }
     }
 
