@@ -343,6 +343,16 @@ fn wire(ui: &AppWindow) {
     a.on_install_core(|tag| with_app(|app| app.install_core(&tag)));
     a.on_select_core(|tag| with_app(|app| app.select_core(&tag)));
     a.on_remove_core(|tag| with_app(|app| app.remove_core(&tag)));
+    a.on_set_connect_off_wifi(|on| {
+        with_app(|app| {
+            app.settings.connect_off_wifi = on;
+            service::set_connect_off_wifi(on);
+            app.save_settings();
+            app.render_settings();
+        })
+    });
+    a.on_set_server_pinned(|on| with_app(|app| app.set_server_pinned(on)));
+    a.on_set_server_reserve(|on| with_app(|app| app.set_server_reserve(on)));
     a.on_set_kill_switch(|on| {
         with_app(|app| {
             app.settings.kill_switch = on;
@@ -741,12 +751,17 @@ impl App {
         };
         let connected = (self.conn.status == Status::On).then_some(self.conn.server.as_deref()).flatten();
         let mut order: Vec<usize> = (0..sub.servers.len()).collect();
+        let favorites = &self.store.settings.favorites;
+        // Pinned servers first, in the order pinned.
+        let pinned = |key: &str| favorites.iter().position(|f| f == key).unwrap_or(usize::MAX);
         if self.sort_by_ping {
-            // The connected server stays on top; unmeasured and failed go last.
+            // Then the connected server; unmeasured and failed go last.
             order.sort_by_key(|&i| {
                 let key = servers::key_of(sub, &sub.servers[i]);
-                (connected != Some(key.as_str()), ping::sort_key(self.pings.get(&key)))
+                (pinned(&key), connected != Some(key.as_str()), ping::sort_key(self.pings.get(&key)))
             });
+        } else {
+            order.sort_by_key(|&i| pinned(&servers::key_of(sub, &sub.servers[i])));
         }
         // The server in use while connected (a network rule may have picked
         // it), else the one the next connect will use.
@@ -782,6 +797,8 @@ impl App {
                     ping_level,
                     selected: selected == Some(key.as_str()),
                     live: live == Some(key.as_str()),
+                    pinned: favorites.contains(&key),
+                    reserve: self.settings.reserve.contains(&key),
                 }
             })
             .collect();
@@ -913,6 +930,8 @@ impl App {
         st.set_live_update(self.settings.live_update);
         st.set_quiet_notification(self.settings.quiet_notification);
         st.set_kill_switch(self.settings.kill_switch);
+        st.set_connect_off_wifi(self.settings.connect_off_wifi);
+        st.set_reserve_count(self.reserve_keys().len() as i32);
         st.set_failover_secs(self.settings.failover_secs as i32);
         st.set_battery_unrestricted(BATTERY_UNRESTRICTED.load(std::sync::atomic::Ordering::Relaxed));
         let share = &self.settings.share;
@@ -1082,11 +1101,72 @@ impl App {
         });
     }
 
+    /// «Закрепить вверху» on the server page: pinned servers lead the list
+    /// (the desktop's favorites, in the order starred).
+    fn set_server_pinned(&mut self, on: bool) {
+        let Some(key) = self.editing_key() else { return };
+        let favorites = &mut self.store.settings.favorites;
+        favorites.retain(|k| *k != key);
+        if on {
+            favorites.push(key);
+        }
+        self.save_store();
+        self.render_servers();
+        if let Some(ui) = self.ui() {
+            ui.global::<AppState>().set_edit_pinned(on);
+        }
+    }
+
+    /// «В резерве» on the server page.
+    fn set_server_reserve(&mut self, on: bool) {
+        let Some(key) = self.editing_key() else { return };
+        self.settings.reserve.retain(|k| *k != key);
+        if on {
+            self.settings.reserve.push(key);
+        }
+        self.save_settings();
+        self.render_servers();
+        self.render_settings();
+        if let Some(ui) = self.ui() {
+            ui.global::<AppState>().set_edit_reserve(on);
+        }
+    }
+
+    fn editing_key(&self) -> Option<String> {
+        let (id, index) = self.editing.clone()?;
+        self.server_key(&id, index)
+    }
+
+    /// The reserve's servers that are still in a subscription.
+    fn reserve_keys(&self) -> Vec<String> {
+        self.settings.reserve.iter().filter(|k| servers::find(&self.store, k).is_some()).cloned().collect()
+    }
+
     /// Moves the connection from the silent server `key` to the fastest other
     /// server of its subscription by the last ping (unmeasured next, failed
-    /// and already tried ones never), as the desktop app does.
+    /// and already tried ones never), as the desktop app does. With a reserve
+    /// set up, only to its servers.
     fn failover(&mut self, key: &str) {
         self.failover_tried.insert(key.to_string());
+        let from = self.server_name(Some(key));
+        let reserve: Vec<String> = self.reserve_keys().into_iter().filter(|k| k != key).collect();
+        if !reserve.is_empty() {
+            let pick = reserve
+                .iter()
+                .enumerate()
+                .filter(|(_, k)| !self.failover_tried.contains(*k) && !matches!(self.pings.get(*k), Some(Err(_))))
+                .min_by_key(|(i, k)| (ping::sort_key(self.pings.get(*k)), *i))
+                .map(|(_, k)| k.clone());
+            let Some(next) = pick else {
+                self.failover_tried.clear();
+                return self.toast("Серверы резерва не отвечают. Проверьте интернет".into());
+            };
+            let to = self.server_name(Some(&next));
+            self.store.settings.last_server = Some(next.clone());
+            self.save_store();
+            self.toast(format!("«{from}» не отвечает, переключаемся на «{to}» из резерва"));
+            return service::switch_to(&next);
+        }
         // The server this network is set to (a hand pick or the rule's
         // auto-select) comes first: it knows better than the last pings.
         if let Some(target) = service::network_target().filter(|t| t != key && !self.failover_tried.contains(t)) {
@@ -1108,7 +1188,6 @@ impl App {
                 let mobile_only = wifi && sub.servers[*i].name.to_lowercase().contains("lte");
                 (mobile_only, ping::sort_key(self.pings.get(k)), *i)
             });
-        let from = self.server_name(Some(key));
         match pick {
             None => {
                 self.failover_tried.clear();
@@ -1184,6 +1263,9 @@ impl App {
         st.set_edit_json(serde_json::to_string_pretty(&s.config_json()).unwrap_or_default().into());
         st.set_edit_error("".into());
         st.set_edit_edited(s.override_key.is_some());
+        let key = servers::key_of(sub, s);
+        st.set_edit_pinned(self.store.settings.favorites.contains(&key));
+        st.set_edit_reserve(self.settings.reserve.contains(&key));
         self.editing = Some((sub.id.clone(), index));
         ui.invoke_open_server_page();
     }
@@ -1231,6 +1313,13 @@ impl App {
         if self.store.settings.last_server.as_deref() == Some(old_key.as_str()) {
             self.store.settings.last_server = Some(new_key.clone());
         }
+        // Pinned and in the reserve under its new key.
+        for k in self.store.settings.favorites.iter_mut().chain(self.settings.reserve.iter_mut()) {
+            if *k == old_key {
+                k.clone_from(&new_key);
+            }
+        }
+        self.save_settings();
         self.pings.remove(&old_key);
         self.editing = None;
         self.save_store();

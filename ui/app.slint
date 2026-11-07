@@ -31,6 +31,9 @@ export struct ServerRow {
     ping-level: int,
     selected: bool,
     live: bool,
+    // «Закрепить вверху» (the desktop's favorites) and «В резерве».
+    pinned: bool,
+    reserve: bool,
 }
 
 export struct SsidRow {
@@ -126,6 +129,7 @@ global Icons {
     out property <image> cellular: @image-url("icons/cellular.svg");
     out property <image> apps: @image-url("icons/apps.svg");
     out property <image> chevron: @image-url("icons/chevron-right.svg");
+    out property <image> star: @image-url("icons/star.svg");
     out property <image> check: @image-url("icons/check.svg");
     out property <image> logo-off: @image-url("assets/logo-off.svg");
     out property <image> logo-on: @image-url("assets/logo-on.svg");
@@ -245,6 +249,9 @@ export global AppState {
     in property <bool> battery-unrestricted: true;
     in property <bool> quiet-notification;
     in property <bool> kill-switch;
+    in property <bool> connect-off-wifi;
+    // Servers in «Резерв» that still exist.
+    in property <int> reserve-count;
     in property <int> failover-secs: 15;
     // «Доступ через хотспот».
     // «Режим работы»: 0 VPN, 1 VPN + прокси, 2 прокси без VPN.
@@ -269,6 +276,8 @@ export global AppState {
     in property <string> edit-json;
     in-out property <string> edit-error;
     in property <bool> edit-edited;
+    in property <bool> edit-pinned;
+    in property <bool> edit-reserve;
     in property <bool> expiry-can-renew;
 }
 
@@ -309,6 +318,9 @@ export global Actions {
     callback set-live-update(bool);
     callback set-quiet-notification(bool);
     callback set-kill-switch(bool);
+    callback set-connect-off-wifi(bool);
+    callback set-server-pinned(bool);
+    callback set-server-reserve(bool);
     callback request-background();
     callback request-local-network();
     callback filter-picker(string);
@@ -801,12 +813,31 @@ component ServerItem inherits Rectangle {
             alignment: center;
             spacing: 3px;
             horizontal-stretch: 1;
-            Text {
-                text: root.server.name;
-                font-size: Theme.fs-title;
-                font-weight: 600;
-                color: root.marked && !root.radio ? Theme.on-tonal : Theme.fg;
-                overflow: elide;
+            HorizontalLayout {
+                spacing: 6px;
+                if root.server.pinned: Image {
+                    source: Icons.star;
+                    colorize: Theme.accent;
+                    width: 15px * Theme.text-scale;
+                    height: 15px * Theme.text-scale;
+                    y: (parent.height - self.height) / 2;
+                }
+                // In «Резерв»: an icon, a chip would squeeze the row.
+                if root.server.reserve: Image {
+                    source: Icons.refresh;
+                    colorize: Theme.accent;
+                    width: 15px * Theme.text-scale;
+                    height: 15px * Theme.text-scale;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: root.server.name;
+                    font-size: Theme.fs-title;
+                    font-weight: 600;
+                    color: root.marked && !root.radio ? Theme.on-tonal : Theme.fg;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
             }
             HorizontalLayout {
                 spacing: 6px;
@@ -2117,7 +2148,7 @@ component SettingsPage inherits Rectangle {
                         }
                         ToggleRow {
                             title: "Держать подключение";
-                            hint: "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на другой сервер той же подписки, самый быстрый по последнему пингу.";
+                            hint: AppState.reserve-count > 0 ? "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на самый быстрый по последнему пингу из резерва (серверов: " + AppState.reserve-count + ")." : "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на другой сервер той же подписки, самый быстрый по последнему пингу. Свой резерв: откройте сервер (›) и включите «В резерве».";
                             checked: AppState.keep-connected;
                             toggled(on) => {
                                 Actions.set-keep-connected(on);
@@ -2131,6 +2162,14 @@ component SettingsPage inherits Rectangle {
                             }
                             plus => {
                                 Actions.set-failover-secs(AppState.failover-secs + 5);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Подключаться без Wi-Fi";
+                            hint: "Ушли с Wi-Fi на мобильную сеть, а VPN выключен: DUORAY подключится сам. Работает, пока DUORAY в памяти: включите «Работу в фоне».";
+                            checked: AppState.connect-off-wifi;
+                            toggled(on) => {
+                                Actions.set-connect-off-wifi(on);
                             }
                         }
                         ToggleRow {
@@ -2996,6 +3035,28 @@ component ServerPage inherits Rectangle {
                 font-size: Theme.fs-caption;
                 color: Theme.muted;
                 overflow: elide;
+            }
+            Card {
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 12px;
+                    ToggleRow {
+                        title: "Закрепить вверху";
+                        hint: "Сервер стоит первым в списке, со звёздочкой.";
+                        checked: AppState.edit-pinned;
+                        toggled(on) => {
+                            Actions.set-server-pinned(on);
+                        }
+                    }
+                    ToggleRow {
+                        title: "В резерве";
+                        hint: "«Держать подключение» переключает только на серверы резерва, на самый быстрый по пингу. В списке — значок с круговыми стрелками.";
+                        checked: AppState.edit-reserve;
+                        toggled(on) => {
+                            Actions.set-server-reserve(on);
+                        }
+                    }
+                }
             }
             json := TextEdit {
                 vertical-stretch: 1;

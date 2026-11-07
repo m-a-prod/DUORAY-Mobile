@@ -38,6 +38,11 @@ pub struct MobileSettings {
     /// «Держать подключение»: how long the server may stay silent before
     /// the connection moves to another one.
     pub failover_secs: u32,
+    /// «Резерв»: servers (by key) a silent one is replaced with, the fastest
+    /// by the last ping. Empty: any server of its subscription.
+    pub reserve: Vec<String>,
+    /// «Подключаться без Wi-Fi»: leaving Wi-Fi for mobile data connects.
+    pub connect_off_wifi: bool,
     /// «Режим работы»: VPN, VPN with a proxy next to it, or the proxy alone.
     pub tunnel: TunnelMode,
     /// The proxy of «VPN + прокси» and «Прокси»; «Доступ через хотспот»
@@ -124,6 +129,8 @@ impl Default for MobileSettings {
             core: None,
             quiet_notification: false,
             failover_secs: 15,
+            reserve: Vec::new(),
+            connect_off_wifi: false,
             keep_connected: false,
             kill_switch: false,
             tunnel: TunnelMode::Vpn,

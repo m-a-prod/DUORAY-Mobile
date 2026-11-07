@@ -263,6 +263,13 @@ impl Service {
 /// MobileSettings::kill_switch.
 static KILL_SWITCH: AtomicBool = AtomicBool::new(false);
 
+/// MobileSettings::connect_off_wifi.
+static CONNECT_OFF_WIFI: AtomicBool = AtomicBool::new(false);
+
+pub fn set_connect_off_wifi(on: bool) {
+    CONNECT_OFF_WIFI.store(on, Ordering::Relaxed);
+}
+
 pub fn set_kill_switch(on: bool) {
     KILL_SWITCH.store(on, Ordering::Relaxed);
 }
@@ -283,6 +290,7 @@ pub fn init(host: Host) {
         crate::status::set_live_update(settings.live_update);
         crate::status::set_quiet(settings.quiet_notification);
         set_kill_switch(settings.kill_switch);
+        set_connect_off_wifi(settings.connect_off_wifi);
         tunnel::select_core(settings.core.as_deref().map(|tag| crate::core::executable(&host.data, tag)));
         s.policy = settings.policy;
         s.apps = settings.apps;
@@ -703,13 +711,21 @@ pub fn on_network(net: NetworkEnv) {
             }
             return;
         }
+        // Off Wi-Fi onto mobile data with nothing connected: «Подключаться
+        // без Wi-Fi» connects (to the network's server, else the last one).
+        let left_wifi = s.online.kind == NetKind::Wifi && net.kind == NetKind::Mobile;
         s.online = net;
         // A new network: its rule counts again.
         s.manual = None;
-        s.wanted_switch()
+        if left_wifi && CONNECT_OFF_WIFI.load(Ordering::Relaxed) && s.status == Status::Off {
+            let last = s.host.as_ref().and_then(|h| Store::load(&h.store()).ok()).and_then(|st| st.settings.last_server);
+            s.target().map(String::from).or(last).map(|key| (key, "left Wi-Fi"))
+        } else {
+            s.wanted_switch().map(|key| (key, "network rule"))
+        }
     };
-    if let Some(key) = switch {
-        start(key, "network rule");
+    if let Some((key, why)) = switch {
+        start(key, why);
     }
 }
 
