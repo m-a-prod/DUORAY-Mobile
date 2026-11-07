@@ -24,11 +24,22 @@ class MainActivity : NativeActivity() {
         Native.boot(this)
         NetworkWatcher.start(applicationContext)
         super.onCreate(savedInstanceState)
+        handleLink(intent)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleLink(intent)
+    }
+
+    private fun handleLink(intent: Intent?) {
+        val link = intent?.data?.toString() ?: return
+        if (link.startsWith("duoray://")) Native.openLink(link)
     }
 
     /** Asks for the VPN the first time, then starts it. */

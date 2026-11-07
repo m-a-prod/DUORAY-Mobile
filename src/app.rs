@@ -148,6 +148,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         })
     });
     setup(&ui);
+    with_app(App::take_link);
     let result = ui.run();
     service::set_listener(None);
     APP.with(|a| *a.borrow_mut() = None);
@@ -804,6 +805,14 @@ impl App {
         }
     }
 
+    fn take_link(&mut self) {
+        let Some(url) = PENDING_LINK.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        if let Some(ui) = self.ui() {
+            ui.global::<AppState>().set_add_prefill(url.into());
+            ui.invoke_open_add();
+        }
+    }
+
     fn toggle(&mut self) {
         match self.conn.status {
             Status::Off | Status::Failed(_) => service::connect(self.store.settings.last_server.clone()),
@@ -1068,6 +1077,17 @@ impl App {
         let tail = tunnel::log_tail(&self.host.xray_log(), 80);
         ui.global::<AppState>().set_xray_log(if tail.is_empty() { "Журнал пуст".into() } else { tail.into() });
     }
+}
+
+/// A subscription from a `duoray://` link, waiting for the window.
+static PENDING_LINK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Opens the add sheet with the subscription from a `duoray://` link, now or
+/// as soon as the window is up (the link may come before it).
+pub fn open_link(link: &str) {
+    let Some(url) = crate::deeplink::subscription(link) else { return };
+    *PENDING_LINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(url);
+    let _ = slint::invoke_from_event_loop(|| with_app(App::take_link));
 }
 
 /// Live pings a connected server may miss before "Держать подключение"

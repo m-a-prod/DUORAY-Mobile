@@ -214,3 +214,13 @@ pub extern "system" fn Java_space_dualizm_duoray_Native_networkChanged<'a>(
     })
     .resolve::<ThrowRuntimeExAndDefault>()
 }
+
+/// `Native.openLink(url)`: the app was opened with a `duoray://` link.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_openLink<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, link: JString<'a>) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        crate::open_link(&string(env, &link)?);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}

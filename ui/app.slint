@@ -194,6 +194,8 @@ export global AppState {
     in property <string> toast;
     // "Подписка «DUALIZM» заканчивается завтра в 14:00"; empty when none.
     in property <string> expiry-text;
+    // A subscription link from duoray://add/..., for the add sheet.
+    in property <string> add-prefill;
     in property <bool> expiry-can-renew;
 }
 
@@ -614,11 +616,13 @@ component ServerItem inherits Rectangle {
     callback long-pressed();
     callback remove();
     property <bool> marked: root.show-selection && root.server.selected;
+    // Inside the subscription card: a radio shows the choice, no fill.
+    in property <bool> radio;
     // A hold pings the server (as in Material Xray); the release after it is no tap.
     property <bool> held;
     height: 58px * Theme.text-scale;
     border-radius: Theme.radius;
-    background: root.marked ? Theme.tonal : touch.pressed ? Theme.fg.with-alpha(0.06) : transparent;
+    background: touch.pressed ? Theme.fg.with-alpha(0.06) : root.marked && !root.radio ? Theme.tonal : transparent;
     animate background { duration: 120ms; easing: ease-out; }
     touch := TouchArea {
         pointer-event(e) => {
@@ -645,6 +649,24 @@ component ServerItem inherits Rectangle {
         padding-left: 10px;
         padding-right: 10px;
         spacing: 12px;
+        if root.radio: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: 10px;
+                border-width: 2px;
+                border-color: root.server.selected ? Theme.accent : Theme.line;
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: Theme.accent;
+                    opacity: root.server.selected ? 1 : 0;
+                    animate opacity { duration: 120ms; }
+                }
+            }
+        }
         VerticalLayout {
             alignment: center;
             if root.server.has-flag: Image {
@@ -665,7 +687,7 @@ component ServerItem inherits Rectangle {
                 text: root.server.name;
                 font-size: Theme.fs-title;
                 font-weight: 600;
-                color: root.marked ? Theme.on-tonal : Theme.fg;
+                color: root.marked && !root.radio ? Theme.on-tonal : Theme.fg;
                 overflow: elide;
             }
             HorizontalLayout {
@@ -871,13 +893,24 @@ component HeaderCard inherits Card {
     }
 }
 
-// The desktop's connection card in one row: status (or the exit country
-// with its flag and the traffic) on the left, the button on the right.
-component ConnectionCard inherits Card {
+// The desktop's connection card, floating over the list: status (or,
+// connected, the exit country with its flag, the server and the traffic)
+// on the left, the button on the right.
+component ConnectionCard inherits Rectangle {
     property <string> state: AppState.conn-state;
-    property <bool> has-exit: root.state == "connected" && AppState.conn-exit-text != "";
-    property <color> tone: root.state == "connected" ? Theme.ok : root.state == "failed" ? Theme.danger : root.state == "idle" ? Theme.line : Theme.warn;
-    HorizontalLayout {
+    property <bool> on: root.state == "connected";
+    property <bool> has-exit: root.on && AppState.conn-exit-text != "";
+    property <color> tone: root.on ? Theme.ok : root.state == "failed" ? Theme.danger : root.state == "idle" ? Theme.line : Theme.warn;
+    border-radius: 20px;
+    background: Theme.card.with-alpha(0.93);
+    border-width: 1px;
+    border-color: Theme.outline.with-alpha(0.9);
+    drop-shadow-blur: 18px;
+    drop-shadow-offset-y: 4px;
+    drop-shadow-color: Theme.shadow;
+    // Sized by its content: a floating element would otherwise fill the window.
+    height: card-row.preferred-height;
+    card-row := HorizontalLayout {
         padding: 10px;
         padding-left: 14px;
         spacing: 12px;
@@ -892,13 +925,12 @@ component ConnectionCard inherits Card {
             if !root.has-exit: Rectangle {
                 width: 18px;
                 height: 18px;
-                // Soft halo: steady when connected, breathing while connecting.
                 Rectangle {
                     width: parent.width;
                     height: parent.height;
                     border-radius: self.height / 2;
                     background: root.tone.with-alpha(0.25);
-                    opacity: root.state == "connecting" ? 0.5 + 0.5 * sin(mod(animation-tick() / 1ms, 1400) / 1400 * 360deg) : root.state == "connected" ? 1 : 0;
+                    opacity: root.state == "connecting" ? 0.5 + 0.5 * sin(mod(animation-tick() / 1ms, 1400) / 1400 * 360deg) : root.on ? 1 : 0;
                 }
                 Rectangle {
                     width: 10px;
@@ -917,39 +949,29 @@ component ConnectionCard inherits Card {
                 text: root.has-exit ? AppState.conn-exit-text : AppState.conn-title;
                 font-size: Theme.fs-title;
                 font-weight: 700;
-                color: root.state == "connected" && !root.has-exit ? Theme.ok : Theme.fg;
+                color: root.on && !root.has-exit ? Theme.ok : Theme.fg;
                 overflow: elide;
             }
             Text {
-                text: root.state == "connected" ? (AppState.conn-node != "" ? AppState.conn-server + " → " + AppState.conn-node : AppState.conn-server) : AppState.conn-detail;
+                text: root.on ? AppState.conn-server : AppState.conn-detail;
                 font-size: Theme.fs-caption;
                 color: root.state == "failed" ? Theme.danger : Theme.muted;
-                wrap: word-wrap;
-                max-height: 32px;
                 overflow: elide;
             }
-            if root.state == "connected": HorizontalLayout {
-                spacing: 6px;
-                if AppState.conn-ping-level != 0: PingChip {
-                    text: AppState.conn-ping-text;
-                    level: AppState.conn-ping-level;
-                }
-                Text {
-                    text: AppState.conn-traffic;
-                    font-size: Theme.fs-caption;
-                    color: Theme.muted;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
+            if root.on && (AppState.conn-traffic != "" || AppState.conn-ping-text != ""): Text {
+                text: (AppState.conn-ping-text != "" ? AppState.conn-ping-text + " · " : "") + AppState.conn-traffic;
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                overflow: elide;
             }
         }
         VerticalLayout {
             alignment: center;
             Button {
-                min-width: 116px;
-                text: root.state == "connected" ? "Отключить" : root.state == "connecting" ? "Отменить" : "Подключить";
-                primary: root.state != "connected";
-                enabled: root.state == "connected" || root.state == "connecting" || AppState.can-connect;
+                height: 40px;
+                text: root.on ? "Отключить" : root.state == "connecting" ? "Отменить" : "Подключить";
+                primary: !root.on;
+                enabled: root.on || root.state == "connecting" || AppState.can-connect;
                 clicked => {
                     Actions.toggle-connection();
                 }
@@ -1118,7 +1140,7 @@ component ChoiceRow inherits Rectangle {
     in property <string> value;
     in property <bool> enabled: true;
     callback clicked();
-    height: 58px;
+    min-height: 68px;
     background: touch.pressed && root.enabled ? Theme.fg.with-alpha(0.06) : transparent;
     opacity: root.enabled ? 1 : 0.45;
     touch := TouchArea {
@@ -1130,6 +1152,8 @@ component ChoiceRow inherits Rectangle {
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 6px;
+        padding-top: 12px;
+        padding-bottom: 12px;
         spacing: 14px;
         Image {
             source: root.icon;
@@ -1150,7 +1174,7 @@ component ChoiceRow inherits Rectangle {
                 text: root.value;
                 font-size: Theme.fs-caption;
                 color: Theme.muted;
-                overflow: elide;
+                wrap: word-wrap;
             }
         }
         Image {
@@ -1803,6 +1827,8 @@ component InputSheet inherits Rectangle {
     in property <string> title;
     in property <string> hint;
     in property <string> placeholder;
+    // A link that opened the app (duoray://add/...), already filled in.
+    in property <string> initial;
     callback close();
     callback submit(string);
     background: Theme.shadow;
@@ -1846,6 +1872,7 @@ component InputSheet inherits Rectangle {
                     y: 10px;
                     width: parent.width - 24px;
                     height: parent.height - 20px;
+                    text: root.initial;
                     single-line: false;
                     wrap: char-wrap;
                     font-size: Theme.fs-small;
@@ -2154,6 +2181,12 @@ export component AppWindow inherits Window {
     in-out property <int> page;
     in-out property <bool> apps-open;
     in-out property <bool> adding;
+    // Rust opens the add sheet for a duoray:// link.
+    callback open-add();
+    open-add => {
+        root.page = 0;
+        root.adding = true;
+    }
     // -1 hidden, else the pick-for target.
     in-out property <int> picking: -1;
     in-out property <bool> confirm-remove;
@@ -2195,23 +2228,23 @@ export component AppWindow inherits Window {
         if root.page == 0: VerticalLayout {
             vertical-stretch: 1;
             HorizontalLayout {
-                height: 56px;
+                height: 52px;
                 padding-left: 20px;
                 padding-right: 10px;
-                spacing: 10px;
+                spacing: 8px;
                 VerticalLayout {
                     alignment: center;
                     Image {
                         source: AppState.conn-state == "connected" ? (Theme.light ? Icons.logo-on-light : Icons.logo-on) : Icons.logo-off;
-                        width: 27px;
-                        height: 22px;
+                        width: 22px;
+                        height: 18px;
                     }
                 }
                 Text {
                     text: "DUORAY";
-                    font-size: 19px;
-                    font-weight: 800;
-                    letter-spacing: 1.5px;
+                    font-size: 18px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }
@@ -2232,58 +2265,56 @@ export component AppWindow inherits Window {
                     root.adding = true;
                 }
             }
-            if AppState.has-sub: VerticalLayout {
+            // One scroll, as in Material Xray: connection, then the
+            // subscription with its servers.
+            if AppState.has-sub: Flickable {
                 vertical-stretch: 1;
-                spacing: 6px;
-                if AppState.subs.length + (AppState.has-manual ? 1 : 0) > 1: Chips { }
-                if AppState.expiry-text != "": HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    ExpiryBanner { }
-                }
-                HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    HeaderCard {
-                        more-clicked => {
-                            root.sub-menu = true;
-                        }
+                content-width: self.width;
+                content-height: home.preferred-height;
+                home := VerticalLayout {
+                    alignment: start;
+                    spacing: 8px;
+                    padding-top: 4px;
+                    padding-bottom: 96px;
+                    if AppState.subs.length + (AppState.has-manual ? 1 : 0) > 1: Chips { }
+                    if AppState.expiry-text != "": HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        ExpiryBanner { }
                     }
-                }
-                Flickable {
-                    vertical-stretch: 1;
-                    content-width: self.width;
-                    content-height: server-list.preferred-height;
-                    server-list := VerticalLayout {
-                        alignment: start;
-                        for row[i] in AppState.servers: HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            ServerItem {
-                                server: row;
-                                manual: AppState.manual-selected;
-                                clicked => {
-                                    Actions.select-server(i);
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        Card {
+                            VerticalLayout {
+                                HeaderCard {
+                                    border-width: 0px;
+                                    background: transparent;
+                                    more-clicked => {
+                                        root.sub-menu = true;
+                                    }
                                 }
-                                long-pressed => {
-                                    Actions.ping-server(i);
-                                }
-                                remove => {
-                                    Actions.remove-server(i);
+                                for row[i] in AppState.servers: VerticalLayout {
+                                    Divider { }
+                                    ServerItem {
+                                        server: row;
+                                        radio: true;
+                                        border-radius: 0px;
+                                        manual: AppState.manual-selected;
+                                        clicked => {
+                                            Actions.select-server(i);
+                                        }
+                                        long-pressed => {
+                                            Actions.ping-server(i);
+                                        }
+                                        remove => {
+                                            Actions.remove-server(i);
+                                        }
+                                    }
                                 }
                             }
                         }
-                
                     }
-                }
-            }
-            VerticalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                padding-top: 6px;
-                padding-bottom: 8px;
-                ConnectionCard {
-                    border-radius: 18px;
                 }
             }
         }
@@ -2337,6 +2368,11 @@ export component AppWindow inherits Window {
         }
     }
 
+    if root.page == 0 && !root.apps-open: ConnectionCard {
+        x: 12px + root.safe-area-insets.left;
+        width: parent.width - 24px - root.safe-area-insets.left - root.safe-area-insets.right;
+        y: parent.height - (64px + max(root.bottom, 8px)) - self.height - 10px;
+    }
     if root.apps-open: AppsPage {
         y: root.top;
         height: parent.height - root.top;
@@ -2363,6 +2399,7 @@ export component AppWindow inherits Window {
     }
     if root.adding: InputSheet {
         top-inset: root.top;
+        initial: AppState.add-prefill;
         title: "Добавить";
         hint: "Ссылка на подписку или ключи vless://, vmess://, trojan://, ss://, hysteria2://";
         placeholder: "https://… или vless://…";

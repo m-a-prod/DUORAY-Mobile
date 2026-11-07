@@ -46,6 +46,9 @@ object Native {
 
     @JvmStatic external fun vpnDenied()
 
+    /** A duoray://add/... link the app was opened with. */
+    @JvmStatic external fun openLink(link: String)
+
     /** kind: 0 offline, 1 Wi-Fi, 2 mobile, 3 other. */
     @JvmStatic external fun networkChanged(kind: Int, ssid: String?)
 }

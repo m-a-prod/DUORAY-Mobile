@@ -3,6 +3,7 @@
 //! now, iOS's packet tunnel later, both through `xray.tun.fd`).
 
 mod app;
+mod deeplink;
 mod exit;
 mod flags;
 mod netpolicy;
@@ -15,6 +16,11 @@ mod themes;
 mod tunnel;
 
 slint::include_modules!();
+
+/// A link the platform opened the app with (`duoray://add/...`).
+pub fn open_link(link: &str) {
+    app::open_link(link);
+}
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
