@@ -55,11 +55,6 @@ impl Traffic {
         format!("↓ {}/с   ↑ {}/с", bytes(self.rate.1 as u64), bytes(self.rate.0 as u64))
     }
 
-    /// "↓ 2.4 МБ/с · ↑ 120.0 КБ/с · 1.2 ГБ"
-    pub fn label(&self) -> String {
-        let rate = |b: f64| format!("{}/с", bytes(b as u64));
-        format!("↓ {} · ↑ {} · {}", rate(self.rate.1), rate(self.rate.0), bytes(self.session.0 + self.session.1))
-    }
 }
 
 #[cfg(test)]
@@ -76,6 +71,6 @@ mod tests {
         // xray restarted: counters start over.
         let c = Traffic::read(Some(&b), t0 + Duration::from_secs(2), (50, 500));
         assert_eq!(c.session, (350, 3500));
-        assert!(c.label().starts_with("↓ 500 Б/с · ↑ 50 Б/с"));
+        assert!(c.speeds().starts_with("↓ 500 Б/с   ↑ 50 Б/с"));
     }
 }

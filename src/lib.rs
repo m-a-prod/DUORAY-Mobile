@@ -22,6 +22,11 @@ pub fn open_link(link: &str) {
     app::open_link(link);
 }
 
+/// What the platform's QR scanner read.
+pub fn scanned(text: &str) {
+    app::scanned(text);
+}
+
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: slint::android::AndroidApp) {

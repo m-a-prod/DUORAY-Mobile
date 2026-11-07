@@ -14,6 +14,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.view.HapticFeedbackConstants
+import com.google.zxing.integration.android.IntentIntegrator
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -61,6 +62,16 @@ class MainActivity : NativeActivity() {
         window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     }
 
+    /** The camera, for a subscription QR code; the result goes to Native.scanned. */
+    fun scanQr() = runOnUiThread {
+        IntentIntegrator(this)
+            .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+            .setPrompt("Наведите камеру на QR-код подписки")
+            .setBeepEnabled(false)
+            .setOrientationLocked(false)
+            .initiateScan()
+    }
+
     fun copyText(text: String) = runOnUiThread {
         getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("DUORAY", text))
     }
@@ -101,6 +112,7 @@ class MainActivity : NativeActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        IntentIntegrator.parseActivityResult(requestCode, resultCode, data)?.contents?.let { Native.scanned(it) }
         if (requestCode == REQUEST_VPN) {
             if (resultCode == RESULT_OK) DuorayVpnService.start(this) else Native.vpnDenied()
         }

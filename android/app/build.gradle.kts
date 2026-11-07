@@ -43,3 +43,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    // The QR scanner (camera screen and decoder).
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // The scanner asks for the camera through it but does not bring it along.
+    implementation("androidx.core:core:1.19.1")
+}

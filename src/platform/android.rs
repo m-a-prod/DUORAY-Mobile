@@ -102,6 +102,10 @@ impl Platform for Android {
         call(&ACTIVITY, jni_str!("requestWifiNames"), None);
     }
 
+    fn scan_qr(&self) {
+        call(&ACTIVITY, jni_str!("scanQr"), None);
+    }
+
     fn copy_text(&self, text: &str) {
         call(&ACTIVITY, jni_str!("copyText"), Some(text));
     }
@@ -220,6 +224,16 @@ pub extern "system" fn Java_space_dualizm_duoray_Native_networkChanged<'a>(
 pub extern "system" fn Java_space_dualizm_duoray_Native_openLink<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, link: JString<'a>) {
     env.with_env(|env| -> jni::errors::Result<()> {
         crate::open_link(&string(env, &link)?);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `Native.scanned(text)`: what the QR scanner read.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_scanned<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, text: JString<'a>) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        crate::scanned(&string(env, &text)?);
         Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>()

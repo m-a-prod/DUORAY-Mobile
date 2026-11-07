@@ -50,6 +50,12 @@
             </intent-filter>
         </activity>
 
+        <!-- The QR scanner follows the phone's orientation. -->
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:screenOrientation="fullSensor"
+            tools:replace="screenOrientation" />
+
         <service
             android:name=".DuorayVpnService"
             android:exported="false"

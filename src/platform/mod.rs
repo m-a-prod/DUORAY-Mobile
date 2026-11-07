@@ -19,6 +19,8 @@ pub trait Platform: Send + Sync {
     fn request_wifi_names(&self) {}
     fn open_url(&self, _url: &str) {}
     fn copy_text(&self, _text: &str) {}
+    /// Opens the camera to read a subscription QR code (answer: `crate::scanned`).
+    fn scan_qr(&self) {}
     /// A short tick of the vibration motor (long press feedback).
     fn haptic(&self) {}
     /// Apps the user can route, for the per-app list. May block.

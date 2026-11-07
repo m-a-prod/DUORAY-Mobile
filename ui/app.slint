@@ -186,6 +186,9 @@ export global AppState {
     in property <int> ping-mode;
     in property <int> ping-threads: 8;
     in property <int> ping-timeout: 5000;
+    in property <string> ping-url;
+    // 0 Default, 1 Double, 2 KeepAlive.
+    in property <int> ping-proxy-mode;
     in property <bool> switch-on-select: true;
     in property <bool> autoconnect;
     in property <bool> keep-connected: true;
@@ -232,12 +235,15 @@ export global Actions {
     callback set-ping-mode(int);
     callback set-ping-threads(int);
     callback set-ping-timeout(int);
+    callback set-ping-url(string);
+    callback set-ping-proxy-mode(int);
     callback set-switch-on-select(bool);
     callback set-autoconnect(bool);
     callback set-keep-connected(bool);
     callback set-show-server-type(bool);
     callback load-log();
     callback connect-fastest();
+    callback scan-qr();
     callback copy-link();
     callback renew();
     callback dismiss-expiry();
@@ -1715,6 +1721,72 @@ component SettingsPage inherits Rectangle {
                             color: Theme.muted;
                             wrap: word-wrap;
                         }
+                        if AppState.ping-mode <= 1: VerticalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: "Адрес проверки";
+                                font-size: Theme.fs-body;
+                                font-weight: 600;
+                            }
+                            Rectangle {
+                                height: 42px;
+                                border-radius: 10px;
+                                background: Theme.bg;
+                                border-width: url-input.has-focus ? 2px : 1px;
+                                border-color: url-input.has-focus ? Theme.accent : Theme.line;
+                                url-input := TextInput {
+                                    x: 12px;
+                                    width: parent.width - 24px;
+                                    height: parent.height;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    text: AppState.ping-url;
+                                    font-size: Theme.fs-small;
+                                    color: Theme.fg;
+                                    accepted => {
+                                        Actions.set-ping-url(self.text);
+                                    }
+                                    edited => {
+                                        Actions.set-ping-url(self.text);
+                                    }
+                                }
+                            }
+                            Text {
+                                text: "Режим";
+                                font-size: Theme.fs-body;
+                                font-weight: 600;
+                            }
+                            HorizontalLayout {
+                                spacing: 4px;
+                                Segment {
+                                    text: "Default";
+                                    active: AppState.ping-proxy-mode == 0;
+                                    clicked => {
+                                        Actions.set-ping-proxy-mode(0);
+                                    }
+                                }
+                                Segment {
+                                    text: "Double";
+                                    active: AppState.ping-proxy-mode == 1;
+                                    clicked => {
+                                        Actions.set-ping-proxy-mode(1);
+                                    }
+                                }
+                                Segment {
+                                    text: "KeepAlive";
+                                    active: AppState.ping-proxy-mode == 2;
+                                    clicked => {
+                                        Actions.set-ping-proxy-mode(2);
+                                    }
+                                }
+                            }
+                            Text {
+                                text: AppState.ping-proxy-mode == 0 ? "Default: один запрос, включая установку соединения." : AppState.ping-proxy-mode == 1 ? "Double: два запроса в одной сессии xray без повторного использования соединения. Берётся лучший результат." : "KeepAlive: два запроса через один транспорт. Второй идёт по уже установленному соединению; берётся лучший результат.";
+                                font-size: Theme.fs-caption;
+                                color: Theme.muted;
+                                wrap: word-wrap;
+                            }
+                        }
                         Stepper {
                             title: "Потоков";
                             value: AppState.ping-threads;
@@ -1895,6 +1967,13 @@ component InputSheet inherits Rectangle {
                     clicked => {
                         input.focus();
                         input.paste();
+                    }
+                }
+                Button {
+                    text: "QR-код";
+                    clicked => {
+                        root.close();
+                        Actions.scan-qr();
                     }
                 }
                 Rectangle {

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use duoray_core::balancer::{self, Trace};
 use duoray_core::identity;
 use duoray_core::server::{Server, display_name};
-use duoray_core::store::{self, PingMode, Store, Subscription};
+use duoray_core::store::{self, PingMode, ProxyPingMode, Store, Subscription};
 use duoray_core::subscription;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
@@ -263,6 +263,24 @@ fn wire(ui: &AppWindow) {
             app.render_settings();
         })
     });
+    a.on_set_ping_url(|url| {
+        with_app(|app| {
+            let url = url.trim();
+            app.store.settings.ping.url = if url.is_empty() { store::DEFAULT_PING_URL.into() } else { url.into() };
+            app.save_store();
+        })
+    });
+    a.on_set_ping_proxy_mode(|m| {
+        with_app(|app| {
+            app.store.settings.ping.proxy_mode = match m {
+                1 => ProxyPingMode::Double,
+                2 => ProxyPingMode::KeepAlive,
+                _ => ProxyPingMode::Default,
+            };
+            app.save_store();
+            app.render_settings();
+        })
+    });
     a.on_set_switch_on_select(|on| {
         with_app(|app| {
             app.store.settings.switch_on_select = on;
@@ -303,6 +321,11 @@ fn wire(ui: &AppWindow) {
         })
     });
     a.on_connect_fastest(|| with_app(App::connect_fastest));
+    a.on_scan_qr(|| {
+        if let Some(p) = service::platform() {
+            p.scan_qr();
+        }
+    });
     a.on_copy_link(|| {
         with_app(|app| {
             if let (Some(url), Some(p)) = (app.sub().map(|s| s.url.clone()).filter(|u| !u.is_empty()), service::platform()) {
@@ -598,6 +621,12 @@ impl App {
             PingMode::Icmp => 3,
         });
         st.set_ping_threads(p.threads as i32);
+        st.set_ping_url(p.url.clone().into());
+        st.set_ping_proxy_mode(match p.proxy_mode {
+            ProxyPingMode::Default => 0,
+            ProxyPingMode::Double => 1,
+            ProxyPingMode::KeepAlive => 2,
+        });
         st.set_ping_timeout(p.timeout_ms as i32);
         st.set_switch_on_select(self.store.settings.switch_on_select);
         st.set_autoconnect(self.store.settings.autoconnect);
@@ -1086,7 +1115,18 @@ static PENDING_LINK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(No
 /// as soon as the window is up (the link may come before it).
 pub fn open_link(link: &str) {
     let Some(url) = crate::deeplink::subscription(link) else { return };
-    *PENDING_LINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(url);
+    prefill(url);
+}
+
+/// What the QR scanner read: a duoray:// link, a subscription URL or keys,
+/// into the add sheet.
+pub fn scanned(text: &str) {
+    let text = text.trim();
+    prefill(crate::deeplink::subscription(text).unwrap_or_else(|| text.to_string()));
+}
+
+fn prefill(text: String) {
+    *PENDING_LINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
     let _ = slint::invoke_from_event_loop(|| with_app(App::take_link));
 }
 
