@@ -8,3 +8,7 @@
 /android/app/build/
 /android/local.properties
 /dist/
+
+# Local agent tooling, not part of the app.
+/.claude/
+/skills-lock.json
