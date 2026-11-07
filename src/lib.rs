@@ -15,6 +15,7 @@ mod qr;
 mod servers;
 mod service;
 mod settings;
+mod share;
 mod status;
 #[cfg(test)]
 mod testing;

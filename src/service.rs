@@ -167,6 +167,9 @@ struct Service {
     net: NetworkEnv,
     tun: Option<RawFd>,
     xray: Option<Xray>,
+    /// A server picked by hand on this network: it beats the network rule
+    /// until the network changes, as in MaterialXray.
+    manual: Option<String>,
     /// Bumped by every connect and disconnect: late results of an older
     /// attempt are dropped.
     attempt: u64,
@@ -203,9 +206,14 @@ impl Service {
         matches!(self.status, Status::On | Status::Connecting)
     }
 
+    /// The server for this network: one picked by hand here, else the rule's.
+    fn target(&self) -> Option<&str> {
+        self.manual.as_deref().or_else(|| self.policy.server_for(&self.net))
+    }
+
     /// The server the current network asks for, when that is not the one in use.
     fn wanted_switch(&self) -> Option<String> {
-        let target = self.policy.server_for(&self.net)?;
+        let target = self.target()?;
         (self.active() && self.tun.is_some() && self.server.as_deref() != Some(target)).then(|| target.to_string())
     }
 
@@ -237,6 +245,7 @@ pub fn init(host: Host) {
         let settings = MobileSettings::load(&host.settings());
         crate::status::set_background_stats(settings.background_stats);
         crate::status::set_live_update(settings.live_update);
+        crate::status::set_quiet(settings.quiet_notification);
         tunnel::select_core(settings.core.as_deref().map(|tag| crate::core::executable(&host.data, tag)));
         s.policy = settings.policy;
         s.apps = settings.apps;
@@ -300,11 +309,23 @@ pub fn set_apps(apps: AppRules) {
     }
 }
 
+/// Re-opens the TUN (its routes follow «Локальная сеть» and the hotspot
+/// proxy) when there is one.
+pub fn rebuild_tun() {
+    let platform = {
+        let s = lock();
+        s.tun.is_some().then(|| s.platform.clone()).flatten()
+    };
+    if let Some(p) = platform {
+        p.rebuild_vpn();
+    }
+}
+
 /// Connects to the server the current network asks for, else to `chosen`.
 pub fn connect(chosen: Option<String>) {
     let key = {
         let s = lock();
-        s.policy.server_for(&s.net).map(String::from).or(chosen)
+        s.target().map(String::from).or(chosen)
     };
     match key {
         Some(key) => start(key),
@@ -316,12 +337,26 @@ pub fn connect(chosen: Option<String>) {
     }
 }
 
-/// A server picked by hand while connected: move there, unless the network
-/// rule decides which server this network uses.
+/// A server picked by hand: it beats the network rule until the network
+/// changes. Returns whether a rule was set aside.
+pub fn pick(key: &str) -> bool {
+    let mut s = lock();
+    let ruled = s.policy.server_for(&s.net).is_some_and(|k| k != key);
+    s.manual = ruled.then(|| key.to_string());
+    ruled
+}
+
+/// The server the current network uses when connecting: a hand pick here,
+/// else the rule's (None: the one chosen in the list).
+pub fn network_target() -> Option<String> {
+    lock().target().map(String::from)
+}
+
+/// A server picked by hand while connected: move there.
 pub fn switch_if_connected(key: &str) {
     let go = {
         let s = lock();
-        s.active() && s.policy.server_for(&s.net).is_none() && s.server.as_deref() != Some(key)
+        s.active() && s.server.as_deref() != Some(key)
     };
     if go {
         start(key.to_string());
@@ -545,6 +580,8 @@ pub fn on_network(net: NetworkEnv) {
         // The kind only: a Wi-Fi name says where the user is.
         crate::diag::log(format!("network: {:?}", net.kind));
         s.net = net;
+        // A new network: its rule counts again.
+        s.manual = None;
         s.notify();
         s.wanted_switch()
     };
@@ -563,6 +600,7 @@ fn write_config(host: &Host, key: &str) -> Result<Link> {
         log::warn!("routing: {warning}");
     }
     let mut config = mobile_config(rt.config);
+    crate::share::add_inbounds(&mut config, &MobileSettings::load(&host.settings()).share);
     let run = host.run_dir();
     std::fs::create_dir_all(&run)?;
     // A new name each time: the xray being replaced removes its own socket

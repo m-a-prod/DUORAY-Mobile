@@ -71,12 +71,15 @@ fn platform() -> String {
     format!("android-{abi}-apk")
 }
 
-fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::Agent::config_builder().timeout_global(Some(timeout)).build().into()
+/// `proxy`: the tunnel's SOCKS while connected — the hub may be what the
+/// network blocks (connection refused, error 111), as with subscriptions.
+fn agent(timeout: Duration, proxy: Option<&str>) -> ureq::Agent {
+    let proxy = proxy.and_then(|p| ureq::Proxy::new(p).ok());
+    ureq::Agent::config_builder().timeout_global(Some(timeout)).proxy(proxy).build().into()
 }
 
-fn get(url: &str) -> Result<Vec<u8>> {
-    let mut body = agent(Duration::from_secs(20))
+fn get(url: &str, proxy: Option<&str>) -> Result<Vec<u8>> {
+    let mut body = agent(Duration::from_secs(20), proxy)
         .get(url)
         .header("User-Agent", USER_AGENT)
         .call()
@@ -85,26 +88,41 @@ fn get(url: &str) -> Result<Vec<u8>> {
     Ok(body.with_config().limit(1024 * 1024).read_to_vec()?)
 }
 
-/// Asks the hubs for a newer version, mirrors in turn. `Ok(None)`: up to date.
-pub fn check() -> Result<Option<Found>> {
-    let mut last = anyhow::anyhow!("нет серверов обновлений");
-    for hub in diag::hubs() {
-        match check_at(&hub) {
-            Ok(m) => {
-                diag::hub_ok(&hub);
-                return Ok(select(m, env!("CARGO_PKG_VERSION"), BUILD, &platform()).map(|f| Found { hub, ..f }));
-            }
-            // A mirror with a bad signature is skipped like a dead one.
-            Err(e) => last = e,
-        }
+/// The ways to reach the hubs: through the tunnel first while connected,
+/// then directly.
+fn routes(proxy: Option<&str>) -> Vec<Option<&str>> {
+    match proxy {
+        Some(p) => vec![Some(p), None],
+        None => vec![None],
     }
-    Err(last)
 }
 
-fn check_at(hub: &str) -> Result<Manifest> {
+/// Asks the hubs for a newer version, mirrors in turn, through the tunnel
+/// first while connected. `Ok(None)`: up to date. The error is the first
+/// one: later mirrors failing says less about why.
+pub fn check(proxy: Option<&str>) -> Result<Option<Found>> {
+    let mut first: Option<anyhow::Error> = None;
+    for route in routes(proxy) {
+        for hub in diag::hubs() {
+            match check_at(&hub, route) {
+                Ok(m) => {
+                    diag::hub_ok(&hub);
+                    return Ok(select(m, env!("CARGO_PKG_VERSION"), BUILD, &platform()).map(|f| Found { hub, ..f }));
+                }
+                // A mirror with a bad signature is skipped like a dead one.
+                Err(e) => {
+                    first.get_or_insert(e);
+                }
+            }
+        }
+    }
+    Err(first.unwrap_or_else(|| anyhow::anyhow!("нет серверов обновлений")).context("сервер обновлений недоступен"))
+}
+
+fn check_at(hub: &str, proxy: Option<&str>) -> Result<Manifest> {
     let base = format!("{hub}/v1/update");
-    let manifest = get(&format!("{base}/manifest.json"))?;
-    let sig = get(&format!("{base}/manifest.sig"))?;
+    let manifest = get(&format!("{base}/manifest.json"), proxy)?;
+    let sig = get(&format!("{base}/manifest.sig"), proxy)?;
     verify(&manifest, &String::from_utf8_lossy(&sig), &PUBLIC_KEY)?;
     serde_json::from_slice(&manifest).context("манифест обновления")
 }
@@ -154,20 +172,24 @@ pub fn newer(a: &str, b: &str) -> bool {
 
 /// Downloads `asset` into `dir` (reusing a verified earlier download), from
 /// `hub` first and then the mirrors. `progress(done, total)` reports bytes.
-pub fn download(asset: &Asset, hub: &str, dir: &Path, progress: impl Fn(u64, u64)) -> Result<PathBuf> {
+pub fn download(asset: &Asset, hub: &str, dir: &Path, proxy: Option<&str>, progress: impl Fn(u64, u64)) -> Result<PathBuf> {
     let mut order = vec![hub.to_string()];
     order.extend(diag::hubs().into_iter().filter(|h| h != hub));
-    let mut last = anyhow::anyhow!("нет серверов обновлений");
-    for h in order.iter().filter(|h| !h.is_empty()) {
-        match download_from(asset, h, dir, &progress) {
-            Ok(path) => return Ok(path),
-            Err(e) => last = e,
+    let mut first: Option<anyhow::Error> = None;
+    for route in routes(proxy) {
+        for h in order.iter().filter(|h| !h.is_empty()) {
+            match download_from(asset, h, dir, route, &progress) {
+                Ok(path) => return Ok(path),
+                Err(e) => {
+                    first.get_or_insert(e);
+                }
+            }
         }
     }
-    Err(last)
+    Err(first.unwrap_or_else(|| anyhow::anyhow!("нет серверов обновлений")))
 }
 
-fn download_from(asset: &Asset, hub: &str, dir: &Path, progress: &impl Fn(u64, u64)) -> Result<PathBuf> {
+fn download_from(asset: &Asset, hub: &str, dir: &Path, proxy: Option<&str>, progress: &impl Fn(u64, u64)) -> Result<PathBuf> {
     if asset.file.is_empty() || !asset.file.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         bail!("неверное имя файла в манифесте");
     }
@@ -183,7 +205,7 @@ fn download_from(asset: &Asset, hub: &str, dir: &Path, progress: &impl Fn(u64, u
         }
     }
     let url = format!("{hub}/v1/update/files/{}", asset.file);
-    let mut body = agent(Duration::from_secs(30 * 60))
+    let mut body = agent(Duration::from_secs(30 * 60), proxy)
         .get(&url)
         .header("User-Agent", USER_AGENT)
         .call()
@@ -313,16 +335,16 @@ mod tests {
         let good = Asset { file: "DUORAY-0.2.0-arm64-v8a.apk".into(), sha256: to_hex(&Sha256::digest(body)), size: body.len() as u64 };
 
         let (hub, request) = crate::testing::fake_hub("200 OK", body);
-        let path = download_from(&good, &hub, &dir, &|_, _| {}).unwrap();
+        let path = download_from(&good, &hub, &dir, None, &|_, _| {}).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
         let (head, _) = request.join().unwrap();
         assert!(head.starts_with("GET /v1/update/files/DUORAY-0.2.0-arm64-v8a.apk "), "{head}");
         // Verified already: no second download.
-        assert_eq!(download_from(&good, "http://127.0.0.1:9", &dir, &|_, _| {}).unwrap(), path);
+        assert_eq!(download_from(&good, "http://127.0.0.1:9", &dir, None, &|_, _| {}).unwrap(), path);
 
         let bad = Asset { file: "DUORAY-0.2.1-arm64-v8a.apk".into(), sha256: "00".repeat(32), size: body.len() as u64 };
         let (hub, _) = crate::testing::fake_hub("200 OK", body);
-        assert!(download_from(&bad, &hub, &dir, &|_, _| {}).is_err(), "checksum");
+        assert!(download_from(&bad, &hub, &dir, None, &|_, _| {}).is_err(), "checksum");
         assert!(!dir.join("DUORAY-0.2.1-arm64-v8a.apk").exists() && !dir.join("DUORAY-0.2.1-arm64-v8a.apk.part").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -330,6 +352,6 @@ mod tests {
     #[test]
     fn download_checks_name() {
         let a = Asset { file: "../x".into(), sha256: String::new(), size: 0 };
-        assert!(download(&a, "https://h", Path::new("/nonexistent"), |_, _| {}).is_err());
+        assert!(download(&a, "https://h", Path::new("/nonexistent"), None, |_, _| {}).is_err());
     }
 }

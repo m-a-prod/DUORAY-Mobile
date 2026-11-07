@@ -15,6 +15,10 @@
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <!-- The QR scanner. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Android 17: the LAN (direct routing, the hotspot proxy), once targetSdk is 37. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <!-- «Работа в фоне»: asks Android not to stop the VPN to save battery. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Updates from the DUORAY hub: the system installer, after the user confirms. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -52,6 +56,10 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- A long press on the Quick Settings tile opens the app. -->
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
             </intent-filter>
             <!-- duoray://add/<subscription url>: the add sheet, filled in. -->
             <intent-filter>

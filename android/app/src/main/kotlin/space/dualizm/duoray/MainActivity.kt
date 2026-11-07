@@ -14,6 +14,7 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import android.window.OnBackInvokedCallback
@@ -31,6 +32,7 @@ class MainActivity : NativeActivity() {
 
     /** The system Back goes to the window while a sheet or a page is open (Android 13+). */
     private var backCallback: Any? = null
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Native.boot(this)
@@ -112,6 +114,32 @@ class MainActivity : NativeActivity() {
         runCatching { startActivity(intent) }
     }
 
+    /**
+     * Android 17 keeps apps off the local network without this permission:
+     * devices on the Wi-Fi or the hotspot could not reach the shared proxy.
+     */
+    private fun localNetworkGranted(): Boolean =
+        Build.VERSION.SDK_INT < 37 || checkSelfPermission(LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+
+    fun requestLocalNetwork() = runOnUiThread {
+        if (!localNetworkGranted()) requestPermissions(arrayOf(LOCAL_NETWORK), REQUEST_LOCAL_NETWORK)
+    }
+
+    /** Whether Android may stop DUORAY in the background to save battery. */
+    private fun reportBattery() {
+        val power = getSystemService(PowerManager::class.java)
+        Native.batteryUnrestricted(power?.isIgnoringBatteryOptimizations(packageName) == true)
+    }
+
+    /** Android's own dialog: let DUORAY run in the background (the VPN is not stopped to save battery). */
+    fun requestBackground() = runOnUiThread {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+        }.onFailure {
+            runCatching { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+        }
+    }
+
     /** Tells Rust what keeps Wi-Fi names hidden, if anything (the routing page explains it). */
     private fun reportWifiAccess() {
         val fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -186,6 +214,8 @@ class MainActivity : NativeActivity() {
     override fun onResume() {
         super.onResume()
         reportWifiAccess()
+        reportBattery()
+        Native.localNetwork(localNetworkGranted())
         val apk = pendingApk ?: return
         if (Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) installApk(apk) else pendingApk = null
     }
@@ -232,6 +262,7 @@ class MainActivity : NativeActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_LOCAL_NETWORK) Native.localNetwork(localNetworkGranted())
         if (requestCode == REQUEST_LOCATION) {
             reportWifiAccess()
             NetworkWatcher.restart(applicationContext)
@@ -246,5 +277,7 @@ class MainActivity : NativeActivity() {
         private const val REQUEST_LOCATION = 2
         private const val REQUEST_NOTIFICATIONS = 3
         private const val REQUEST_SCAN = 4
+        private const val REQUEST_LOCAL_NETWORK = 5
+        private const val LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
     }
 }

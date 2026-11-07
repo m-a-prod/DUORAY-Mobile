@@ -23,7 +23,8 @@ pub(super) enum UpdateState {
     Checking,
     /// Newer version found on mobile data: downloaded when the user asks.
     Found(Found),
-    Downloading(String),
+    /// Version, percent, install when done (the banner was tapped).
+    Downloading(String, u8, bool),
     /// Verified and ready to install.
     Ready(Found, PathBuf),
 }
@@ -99,7 +100,7 @@ impl App {
                 "whitelist_direct": s.routing.simple.whitelist_direct,
                 "lan_direct": s.routing.simple.lan_direct,
                 "apps_mode": self.settings.apps.mode.code(),
-                "apps": self.settings.apps.packages.len(),
+                "apps": self.settings.apps.list().len(),
                 "network_rules": self.settings.policy.ssids.len(),
                 "keep_connected": s.keep_connected,
                 "autoconnect": s.autoconnect,
@@ -160,15 +161,16 @@ impl App {
     /// "Проверить обновления" (runs with automatic checks off, downloads on
     /// mobile data too).
     pub(super) fn check_update(&mut self, manual: bool) {
-        let busy = matches!(self.update, UpdateState::Checking | UpdateState::Downloading(_));
+        let busy = matches!(self.update, UpdateState::Checking | UpdateState::Downloading(..));
         if busy || (!manual && !self.store.settings.auto_update) || matches!(self.update, UpdateState::Ready(..)) {
             return;
         }
         self.update = UpdateState::Checking;
         self.set_update_info("Проверка обновлений…");
         self.show_update();
+        let proxy = self.conn.link.as_ref().map(service::Link::proxy_url);
         std::thread::spawn(move || {
-            let found = update::check().map_err(|e| format!("{e:#}"));
+            let found = update::check(proxy.as_deref()).map_err(|e| format!("{e:#}"));
             later(move |app| app.update_checked(found, manual));
         });
     }
@@ -181,12 +183,13 @@ impl App {
             }
             Ok(Some(f)) => {
                 diag::log(format!("update {} found", f.version));
+                self.set_update_info(&format!("Доступна версия {}.", f.version));
+                // On Wi-Fi it downloads ahead; the banner installs on a tap.
                 let wifi = self.conn.net.kind == NetKind::Wifi;
                 if manual || wifi {
-                    self.download_update(f);
+                    self.download_update(f, false);
                     return;
                 }
-                self.set_update_info(&format!("Доступна версия {}.", f.version));
                 self.update = UpdateState::Found(f);
             }
             Err(e) => {
@@ -198,39 +201,48 @@ impl App {
         self.show_update();
     }
 
-    fn download_update(&mut self, found: Found) {
+    /// `install`: the user tapped the banner, so the installer opens as soon
+    /// as the file is in and verified.
+    fn download_update(&mut self, found: Found, install: bool) {
         let version = found.version.clone();
         self.set_update_info(&format!("Загружается версия {version}…"));
-        self.update = UpdateState::Downloading(version);
+        self.update = UpdateState::Downloading(version, 0, install);
         self.show_update();
         let dir = self.host.data.join("updates");
+        let proxy = self.conn.link.as_ref().map(service::Link::proxy_url);
         std::thread::spawn(move || {
             let last = AtomicU64::new(0);
-            let result = update::download(&found.asset, &found.hub, &dir, |done, total| {
+            let result = update::download(&found.asset, &found.hub, &dir, proxy.as_deref(), |done, total| {
                 // A few progress updates, not one per chunk.
                 let pct = done * 100 / total.max(1);
-                if pct >= last.load(Ordering::Relaxed) + 5 {
+                if pct >= last.load(Ordering::Relaxed) + 2 {
                     last.store(pct, Ordering::Relaxed);
                     later(move |app| {
-                        if let Some(ui) = app.ui() {
-                            ui.global::<AppState>().set_update_banner(format!("Загрузка обновления… {pct}%").into());
+                        if let UpdateState::Downloading(_, p, _) = &mut app.update {
+                            *p = pct as u8;
                         }
+                        app.show_update();
                     });
                 }
             });
             let result = result.map_err(|e| format!("{e:#}"));
             later(move |app| {
+                let install = matches!(app.update, UpdateState::Downloading(_, _, true));
                 match result {
                     Ok(file) => {
                         diag::log(format!("update {} downloaded and verified", found.version));
                         let notes = if found.notes.is_empty() { String::new() } else { format!(" Что нового: {}", found.notes) };
                         app.set_update_info(&format!("Версия {} загружена и проверена.{notes}", found.version));
                         app.update = UpdateState::Ready(found, file);
+                        if install {
+                            app.update_clicked();
+                        }
                     }
                     Err(e) => {
                         diag::log(format!("update download failed: {e}"));
                         app.set_update_info(&format!("Не удалось загрузить обновление: {e}"));
-                        app.update = UpdateState::Idle;
+                        app.update = UpdateState::Found(found);
+                        app.toast(format!("Не удалось загрузить обновление: {e}"));
                     }
                 }
                 app.show_update();
@@ -238,10 +250,12 @@ impl App {
         });
     }
 
-    /// The banner's button: download (mobile data) or install.
+    /// A tap on the banner, as in MaterialXray: download if needed, then the
+    /// system installer.
     pub(super) fn update_clicked(&mut self) {
         match std::mem::take(&mut self.update) {
-            UpdateState::Found(f) => self.download_update(f),
+            UpdateState::Found(f) => self.download_update(f, true),
+            UpdateState::Downloading(v, p, _) => self.update = UpdateState::Downloading(v, p, true),
             UpdateState::Ready(f, file) => {
                 diag::log(format!("installing update {}", f.version));
                 if let Some(p) = service::platform() {
@@ -252,6 +266,7 @@ impl App {
             }
             other => self.update = other,
         }
+        self.show_update();
     }
 
     fn set_update_info(&self, text: &str) {
@@ -260,16 +275,19 @@ impl App {
         }
     }
 
+    /// The banner over the server list: title, version line, and a progress
+    /// bar while downloading (-1: none).
     fn show_update(&self) {
         let Some(ui) = self.ui() else { return };
-        let (banner, button) = match &self.update {
-            UpdateState::Idle | UpdateState::Checking => (String::new(), ""),
-            UpdateState::Found(f) => (format!("Доступно обновление {}", f.version), "Загрузить"),
-            UpdateState::Downloading(v) => (format!("Загрузка обновления {v}…"), ""),
-            UpdateState::Ready(f, _) => (format!("Доступно обновление {}", f.version), "Установить"),
+        let (detail, progress) = match &self.update {
+            UpdateState::Idle | UpdateState::Checking => (String::new(), -1.0),
+            UpdateState::Found(f) => (format!("DUORAY {} · нажмите, чтобы установить", f.version), -1.0),
+            UpdateState::Downloading(v, p, _) => (format!("DUORAY {v} · загрузка {p}%"), f32::from(*p) / 100.0),
+            UpdateState::Ready(f, _) => (format!("DUORAY {} загружено · нажмите, чтобы установить", f.version), -1.0),
         };
         let st = ui.global::<AppState>();
-        st.set_update_banner(banner.into());
-        st.set_update_button(button.into());
+        st.set_update_banner(if detail.is_empty() { "".into() } else { "Доступно обновление".into() });
+        st.set_update_detail(detail.into());
+        st.set_update_progress(progress);
     }
 }

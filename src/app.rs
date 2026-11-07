@@ -80,16 +80,34 @@ fn with_app(f: impl FnOnce(&mut App)) {
 }
 
 /// Runs `f` on the UI thread with the app, from any thread.
-/// The system Back (Android's OnBackInvokedCallback), as the Back key the
-/// window handles.
+/// Whether Android leaves DUORAY alone in the background (Android reports it
+/// on every return to the app).
+static BATTERY_UNRESTRICTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Android 17's local network permission, for the hotspot proxy.
+static LOCAL_NETWORK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_local_network(granted: bool) {
+    LOCAL_NETWORK.store(granted, std::sync::atomic::Ordering::Relaxed);
+    let _ = slint::invoke_from_event_loop(|| with_app(|app| app.render_settings()));
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_battery_unrestricted(on: bool) {
+    BATTERY_UNRESTRICTED.store(on, std::sync::atomic::Ordering::Relaxed);
+    let _ = slint::invoke_from_event_loop(|| with_app(|app| app.render_settings()));
+}
+
+/// The system Back (Android's OnBackInvokedCallback): closes what is open.
+/// Not a key event: keys go to whatever has the focus (a text field in a
+/// sheet), which knows nothing of Back.
 pub fn back() {
     let _ = slint::invoke_from_event_loop(|| {
         with_app(|app| {
-            let Some(ui) = app.ui() else { return };
-            let key: slint::SharedString = slint::platform::Key::Back.into();
-            let window = ui.window();
-            window.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.clone() });
-            window.dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key });
+            if let Some(ui) = app.ui() {
+                ui.invoke_go_back();
+            }
         })
     });
 }
@@ -260,9 +278,12 @@ fn wire(ui: &AppWindow) {
     a.on_toggle_app(|package| {
         with_app(|app| {
             let package = package.to_string();
-            app.edit_apps(|r| match r.packages.iter().position(|p| *p == package) {
-                Some(i) => drop(r.packages.remove(i)),
-                None => r.packages.push(package),
+            app.edit_apps(|r| {
+                let list = r.list_mut();
+                match list.iter().position(|p| *p == package) {
+                    Some(i) => drop(list.remove(i)),
+                    None => list.push(package),
+                }
             })
         })
     });
@@ -316,6 +337,47 @@ fn wire(ui: &AppWindow) {
     a.on_install_core(|tag| with_app(|app| app.install_core(&tag)));
     a.on_select_core(|tag| with_app(|app| app.select_core(&tag)));
     a.on_remove_core(|tag| with_app(|app| app.remove_core(&tag)));
+    a.on_set_quiet_notification(|on| {
+        with_app(|app| {
+            app.settings.quiet_notification = on;
+            crate::status::set_quiet(on);
+            app.save_settings();
+            app.render_settings();
+        })
+    });
+    a.on_filter_picker(|query| {
+        with_app(|app| {
+            let Some(ui) = app.ui() else { return };
+            let st = ui.global::<AppState>();
+            let query = query.trim().to_lowercase();
+            let hidden: Vec<bool> = st
+                .get_servers()
+                .iter()
+                .map(|r| !query.is_empty() && ![r.name.as_str(), r.description.as_str(), r.badge.as_str()].iter().any(|t| t.to_lowercase().contains(&query)))
+                .collect();
+            st.set_picker_hidden(ModelRc::new(VecModel::from(hidden)));
+        })
+    });
+    a.on_request_local_network(|| {
+        if let Some(p) = service::platform() {
+            p.request_local_network();
+        }
+    });
+    a.on_request_background(|| {
+        if let Some(p) = service::platform() {
+            p.request_background();
+        }
+    });
+    a.on_set_failover_secs(|v| {
+        with_app(|app| {
+            app.settings.failover_secs = v.clamp(5, 120) as u32;
+            app.save_settings();
+            app.render_settings();
+        })
+    });
+    a.on_set_share(|on| with_app(|app| app.edit_share(|s| s.enabled = on)));
+    a.on_set_share_auth(|on| with_app(|app| app.edit_share(|s| s.auth = on)));
+    a.on_new_share_password(|| with_app(|app| app.edit_share(|s| s.pass = crate::settings::new_password())));
     a.on_set_live_update(|on| {
         with_app(|app| {
             app.settings.live_update = on;
@@ -448,6 +510,10 @@ fn wire(ui: &AppWindow) {
             app.save_store();
             app.render_networks();
             service::reconnect();
+            if which == 2 {
+                // The LAN leaves or joins the VPN's routes.
+                service::rebuild_tun();
+            }
         })
     });
     a.on_connect_fastest(|| with_app(App::connect_fastest));
@@ -669,10 +735,10 @@ impl App {
         }
         // The server in use while connected (a network rule may have picked
         // it), else the one the next connect will use.
-        let rule = self.settings.policy.server_for(&self.conn.net);
+        let rule = service::network_target();
         let selected = match self.conn.status {
             Status::On | Status::Connecting => self.conn.server.as_deref(),
-            _ => rule.or(self.store.settings.last_server.as_deref()),
+            _ => rule.as_deref().or(self.store.settings.last_server.as_deref()),
         };
         let live = (self.conn.status == Status::On).then_some(self.conn.server.as_deref()).flatten();
         let rows: Vec<ServerRow> = order
@@ -719,7 +785,7 @@ impl App {
     fn render_connection(&self) {
         let Some(ui) = self.ui() else { return };
         let st = ui.global::<AppState>();
-        let rule = self.settings.policy.server_for(&self.conn.net).map(String::from);
+        let rule = service::network_target();
         let chosen = rule.clone().or_else(|| self.store.settings.last_server.clone());
         let server = self.conn.server.clone().or_else(|| chosen.clone());
         let (state, title, detail) = match &self.conn.status {
@@ -807,7 +873,7 @@ impl App {
         let rules: Vec<SsidRow> = p.ssids.iter().map(|r| SsidRow { ssid: r.ssid.clone().into(), server: label(Some(&r.server)).into() }).collect();
         st.set_ssid_rules(ModelRc::new(VecModel::from(rules)));
         st.set_app_mode(self.settings.apps.mode.code());
-        st.set_app_count(self.settings.apps.packages.len() as i32);
+        st.set_app_count(self.settings.apps.list().len() as i32);
         let simple = &self.store.settings.routing.simple;
         st.set_ru_direct(simple.ru_direct);
         st.set_whitelist_direct(simple.whitelist_direct);
@@ -828,6 +894,16 @@ impl App {
         st.set_mobile_ping_threads(self.settings.mobile_ping_threads as i32);
         st.set_background_stats(self.settings.background_stats);
         st.set_live_update(self.settings.live_update);
+        st.set_quiet_notification(self.settings.quiet_notification);
+        st.set_failover_secs(self.settings.failover_secs as i32);
+        st.set_battery_unrestricted(BATTERY_UNRESTRICTED.load(std::sync::atomic::Ordering::Relaxed));
+        let share = &self.settings.share;
+        st.set_share_enabled(share.enabled);
+        st.set_share_auth(share.auth);
+        st.set_share_user(share.user.as_str().into());
+        st.set_share_pass(share.pass.as_str().into());
+        st.set_local_network(LOCAL_NETWORK.load(std::sync::atomic::Ordering::Relaxed));
+        st.set_share_addresses(if share.enabled { crate::share::describe(share).into() } else { "".into() });
         st.set_core_label(self.core_label().into());
         st.set_ping_url(p.url.clone().into());
         st.set_ping_proxy_mode(match p.proxy_mode {
@@ -852,7 +928,7 @@ impl App {
     fn render_apps(&self) {
         let Some(ui) = self.ui() else { return };
         let filter = self.apps_filter.to_lowercase();
-        let chosen = &self.settings.apps.packages;
+        let chosen = self.settings.apps.list();
         let mut apps: Vec<&AppInfo> = self
             .apps
             .iter()
@@ -945,7 +1021,8 @@ impl App {
 
     /// The connected server's delay through the tunnel itself, every 5 s, the
     /// same request as the list's ping; its result lands in the server's row.
-    /// "Держать подключение" moves on after LIVE_FAILURES misses in a row.
+    /// "Держать подключение" moves on once it has been silent for
+    /// MobileSettings::failover_secs.
     fn live_ping(&mut self) {
         let (Some(link), Some(key)) = (self.conn.link.clone(), self.conn.server.clone()) else { return };
         if self.live_busy {
@@ -973,7 +1050,9 @@ impl App {
                 }
                 app.render_servers();
                 app.render_connection();
-                if app.live_failures >= LIVE_FAILURES && app.store.settings.keep_connected {
+                // Pings go every 5 s: the setting in seconds, in misses.
+                let allowed = app.settings.failover_secs.div_ceil(5).max(1);
+                if app.live_failures >= allowed && app.store.settings.keep_connected {
                     app.live_failures = 0;
                     app.failover(&key);
                 }
@@ -1168,11 +1247,11 @@ impl App {
         let Some(key) = self.row_key(row) else { return };
         self.store.settings.last_server = Some(key.clone());
         self.save_store();
+        if service::pick(&key) {
+            self.toast(format!("Выбран вручную. Правило для сети «{}» вернётся при смене сети", self.conn.net.describe()));
+        }
         self.render_servers();
         self.render_connection();
-        if self.settings.policy.server_for(&self.conn.net).is_some_and(|k| k != key) {
-            return self.toast(format!("Для сети «{}» сервер задан в маршрутизации", self.conn.net.describe()));
-        }
         if self.store.settings.switch_on_select {
             service::switch_if_connected(&key);
         }
@@ -1393,6 +1472,30 @@ impl App {
         });
     }
 
+    /// «Доступ через хотспот» changed: a live connection restarts with the
+    /// new listeners. A password is made the first time it is needed.
+    fn edit_share(&mut self, edit: impl FnOnce(&mut crate::settings::ShareProxy)) {
+        let was = self.settings.share.enabled;
+        edit(&mut self.settings.share);
+        if self.settings.share.pass.is_empty() {
+            self.settings.share.pass = crate::settings::new_password();
+        }
+        // Saved first: the TUN reads mobile.json for its routes.
+        self.save_settings();
+        self.render_settings();
+        if was != self.settings.share.enabled {
+            service::rebuild_tun();
+        }
+        if self.settings.share.enabled
+            && let Some(p) = service::platform()
+        {
+            p.request_local_network();
+        }
+        if matches!(self.conn.status, Status::On | Status::Connecting) {
+            service::reconnect();
+        }
+    }
+
     fn edit_apps(&mut self, edit: impl FnOnce(&mut crate::settings::AppRules)) {
         edit(&mut self.settings.apps);
         self.save_settings();
@@ -1432,10 +1535,6 @@ fn prefill(text: String) {
 
 /// Platforms Happ Spoof can claim, in the picker's order.
 const HAPP_OS: [&str; 4] = ["Android", "iOS", "Windows", "macOS"];
-
-/// Live pings a connected server may miss before "Держать подключение"
-/// moves away from it (15 s).
-const LIVE_FAILURES: u32 = 3;
 
 /// Last ping results, kept in pings.json so they show after a restart
 /// (desktop format: server key -> milliseconds, or null for no answer).

@@ -35,6 +35,7 @@ impl Notice {
     /// One string over JNI: fields joined with U+001F.
     pub fn pack(&self) -> String {
         let live = if LIVE_UPDATE.load(Ordering::Relaxed) { "1" } else { "0" };
+        let quiet = if QUIET.load(Ordering::Relaxed) { "1" } else { "0" };
         [
             self.state.to_string(),
             self.title.clone(),
@@ -43,6 +44,7 @@ impl Notice {
             self.chip.clone(),
             self.since_ms.to_string(),
             live.to_string(),
+            quiet.to_string(),
         ]
         .join("\u{1f}")
     }
@@ -80,6 +82,8 @@ static WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 static BACKGROUND_STATS: AtomicBool = AtomicBool::new(true);
 /// MobileSettings::live_update.
 static LIVE_UPDATE: AtomicBool = AtomicBool::new(true);
+/// MobileSettings::quiet_notification.
+static QUIET: AtomicBool = AtomicBool::new(false);
 static SINCE: AtomicI64 = AtomicI64::new(0);
 static LAST: Mutex<Option<Notice>> = Mutex::new(None);
 /// The link the background poller watches: one poller per connection.
@@ -96,9 +100,19 @@ pub fn set_background_stats(on: bool) {
 
 /// Live Update on or off; the notification changes right away.
 pub fn set_live_update(on: bool) {
-    if LIVE_UPDATE.swap(on, Ordering::Relaxed) == on {
-        return;
+    if LIVE_UPDATE.swap(on, Ordering::Relaxed) != on {
+        republish();
     }
+}
+
+/// «Свернуть уведомление» on or off; the notification changes right away.
+pub fn set_quiet(on: bool) {
+    if QUIET.swap(on, Ordering::Relaxed) != on {
+        republish();
+    }
+}
+
+fn republish() {
     let last = LAST.lock().unwrap_or_else(|e| e.into_inner()).clone();
     // Its own thread: the caller may hold the service lock (service::init).
     if let Some(notice) = last {

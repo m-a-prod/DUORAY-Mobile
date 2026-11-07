@@ -238,7 +238,22 @@ export global AppState {
     in property <bool> auto-update;
     in property <string> update-info;
     in property <string> update-banner;
-    in property <string> update-button;
+    in property <string> update-detail;
+    // 0..1 while downloading, -1 otherwise.
+    in property <float> update-progress: -1;
+    // Android leaves DUORAY alone in the background (battery optimization off).
+    in property <bool> battery-unrestricted: true;
+    in property <bool> quiet-notification;
+    in property <int> failover-secs: 15;
+    // «Доступ через хотспот».
+    in property <bool> share-enabled;
+    in property <bool> share-auth: true;
+    in property <string> share-user;
+    in property <string> share-pass;
+    in property <string> share-addresses;
+    in property <bool> local-network: true;
+    // The server picker's search: rows that do not match are hidden.
+    in property <[bool]> picker-hidden;
     in-out property <bool> consent-open;
     in-out property <bool> report-open;
     in property <string> report-preview;
@@ -289,6 +304,14 @@ export global Actions {
     callback set-mobile-ping-threads(int);
     callback set-background-stats(bool);
     callback set-live-update(bool);
+    callback set-quiet-notification(bool);
+    callback request-background();
+    callback request-local-network();
+    callback filter-picker(string);
+    callback set-failover-secs(int);
+    callback set-share(bool);
+    callback set-share-auth(bool);
+    callback new-share-password();
     callback open-cores();
     callback install-core(string);
     callback select-core(string);
@@ -646,12 +669,14 @@ component Stepper inherits HorizontalLayout {
     callback minus();
     callback plus();
     spacing: 4px;
+    // Wraps on narrow screens instead of pushing the buttons off the edge.
     Text {
         text: root.title;
         font-size: Theme.fs-body;
         font-weight: 600;
         vertical-alignment: center;
         horizontal-stretch: 1;
+        wrap: word-wrap;
     }
     Button {
         text: "−";
@@ -663,7 +688,7 @@ component Stepper inherits HorizontalLayout {
     Text {
         text: root.value;
         font-size: Theme.fs-body;
-        min-width: 64px;
+        min-width: 52px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -2024,31 +2049,41 @@ component SettingsPage inherits Rectangle {
                     VerticalLayout {
                         padding: 12px;
                         spacing: 14px;
-                        ToggleRow {
-                            title: "Закреплять в шторке";
-                            hint: "Android 16 и новее: подключение висит наверху шторки и значком в строке состояния (Live Update). Выключите, если мешает: останется обычное тихое уведомление.";
-                            checked: AppState.live-update;
-                            toggled(on) => {
-                                Actions.set-live-update(on);
+                        VerticalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Работа в фоне";
+                                font-size: Theme.fs-body;
+                                font-weight: 600;
                             }
-                        }
-                        ToggleRow {
-                            title: "Скорость в шторке в фоне";
-                            hint: "Пока приложение закрыто, уведомление показывает скорость и страну выхода: DUORAY раз в 3 секунды спрашивает счётчики у xray. Выключите, чтобы беречь батарею.";
-                            checked: AppState.background-stats;
-                            toggled(on) => {
-                                Actions.set-background-stats(on);
+                            Text {
+                                text: AppState.battery-unrestricted ? "Разрешено: Android не остановит VPN ради экономии батареи." : "Android может остановить VPN в фоне, чтобы сберечь батарею. Разрешите DUORAY работать без ограничений.";
+                                font-size: Theme.fs-caption;
+                                color: AppState.battery-unrestricted ? Theme.muted : Theme.warn;
+                                wrap: word-wrap;
+                            }
+                            if !AppState.battery-unrestricted: HorizontalLayout {
+                                Button {
+                                    text: "Разрешить";
+                                    primary: true;
+                                    clicked => {
+                                        Actions.request-background();
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
                             }
                         }
                         VerticalLayout {
                             spacing: 8px;
                             Text {
-                                text: "Постоянная VPN";
+                                text: "Постоянный VPN";
                                 font-size: Theme.fs-body;
                                 font-weight: 600;
                             }
                             Text {
-                                text: "Android сам запускает DUORAY после включения телефона и поднимает VPN к последнему серверу. Включается в настройках Android: DUORAY → «Постоянная VPN». Там же можно блокировать интернет без VPN; приложения, пущенные в обход, тогда останутся без сети.";
+                                text: "Android сам запускает DUORAY после включения телефона и подключает к последнему серверу. Включается в настройках Android: DUORAY → «Постоянная VPN». Там же можно блокировать интернет без VPN; приложения, пущенные в обход, тогда останутся без сети.";
                                 font-size: Theme.fs-caption;
                                 color: Theme.muted;
                                 wrap: word-wrap;
@@ -2081,12 +2116,137 @@ component SettingsPage inherits Rectangle {
                                 Actions.set-keep-connected(on);
                             }
                         }
+                        if AppState.keep-connected: Stepper {
+                            title: "Переключать через";
+                            value: AppState.failover-secs + " с";
+                            minus => {
+                                Actions.set-failover-secs(AppState.failover-secs - 5);
+                            }
+                            plus => {
+                                Actions.set-failover-secs(AppState.failover-secs + 5);
+                            }
+                        }
                         ToggleRow {
                             title: "Переключаться при выборе сервера";
                             hint: "Если VPN подключён, выбор другого сервера в списке сразу переключает подключение на него.";
                             checked: AppState.switch-on-select;
                             toggled(on) => {
                                 Actions.set-switch-on-select(on);
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
+                        text: "УВЕДОМЛЕНИЕ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+                        ToggleRow {
+                            title: "Свернуть уведомление";
+                            hint: "Пока VPN работает, Android требует уведомление, убрать его совсем нельзя. Свёрнутое лежит внизу шторки одной строкой, без значка в строке состояния.";
+                            checked: AppState.quiet-notification;
+                            toggled(on) => {
+                                Actions.set-quiet-notification(on);
+                            }
+                        }
+                        if !AppState.quiet-notification: ToggleRow {
+                            title: "Закреплять в шторке";
+                            hint: "Android 16 и новее: подключение висит наверху шторки и значком в строке состояния (Live Update).";
+                            checked: AppState.live-update;
+                            toggled(on) => {
+                                Actions.set-live-update(on);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Скорость в шторке в фоне";
+                            hint: "Пока приложение закрыто, уведомление показывает скорость и страну выхода: DUORAY раз в 3 секунды спрашивает счётчики у xray. Выключите, чтобы беречь батарею.";
+                            checked: AppState.background-stats;
+                            toggled(on) => {
+                                Actions.set-background-stats(on);
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
+                        text: "ДРУГИЕ УСТРОЙСТВА";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+                        ToggleRow {
+                            title: "Доступ через хотспот";
+                            hint: "Телефон становится SOCKS5 и HTTP-прокси для устройств в той же Wi-Fi сети или на его точке доступа: укажите прокси в их настройках сети. Работает, пока VPN подключён.";
+                            checked: AppState.share-enabled;
+                            toggled(on) => {
+                                Actions.set-share(on);
+                            }
+                        }
+                        if AppState.share-enabled: Text {
+                            text: AppState.share-addresses;
+                            font-family: "monospace";
+                            font-size: Theme.fs-small;
+                            color: Theme.fg;
+                            wrap: word-wrap;
+                        }
+                        if AppState.share-enabled && !AppState.local-network: Text {
+                            text: "Android не пускает к телефону устройства из сети: разрешите DUORAY доступ к локальной сети.";
+                            font-size: Theme.fs-caption;
+                            color: Theme.warn;
+                            wrap: word-wrap;
+                        }
+                        if AppState.share-enabled && !AppState.local-network: HorizontalLayout {
+                            Button {
+                                text: "Разрешить";
+                                primary: true;
+                                clicked => {
+                                    Actions.request-local-network();
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        if AppState.share-enabled: ToggleRow {
+                            title: "Логин и пароль";
+                            hint: "Без них прокси может использовать любое устройство в сети и любое приложение на телефоне, в том числе для проверки, включён ли VPN.";
+                            checked: AppState.share-auth;
+                            toggled(on) => {
+                                Actions.set-share-auth(on);
+                            }
+                        }
+                        if AppState.share-enabled && AppState.share-auth: Text {
+                            text: AppState.share-user + " / " + AppState.share-pass;
+                            font-family: "monospace";
+                            font-size: Theme.fs-small;
+                            color: Theme.fg;
+                        }
+                        if AppState.share-enabled && AppState.share-auth: HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Скопировать";
+                                clicked => {
+                                    Actions.copy-text(AppState.share-user + ":" + AppState.share-pass);
+                                }
+                            }
+                            Button {
+                                text: "Новый пароль";
+                                clicked => {
+                                    Actions.new-share-password();
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
                             }
                         }
                     }
@@ -2534,6 +2694,9 @@ component PickerSheet inherits Rectangle {
     in property <length> bottom-inset;
     callback close();
     background: Theme.bg;
+    init => {
+        Actions.filter-picker("");
+    }
     TouchArea { }
     VerticalLayout {
         padding-top: root.top-inset;
@@ -2588,6 +2751,37 @@ component PickerSheet inherits Rectangle {
                 }
             }
         }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-bottom: 6px;
+            Rectangle {
+                height: 42px;
+                border-radius: 21px;
+                background: Theme.card;
+                border-width: 1px;
+                border-color: picker-search.has-focus ? Theme.accent : Theme.outline;
+                picker-search := TextInput {
+                    x: 16px;
+                    width: parent.width - 32px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    font-size: Theme.fs-body;
+                    color: Theme.fg;
+                    single-line: true;
+                    edited => {
+                        Actions.filter-picker(self.text);
+                    }
+                }
+                if picker-search.text == "": Text {
+                    x: 16px;
+                    text: "Поиск сервера";
+                    font-size: Theme.fs-body;
+                    color: Theme.muted;
+                    vertical-alignment: center;
+                }
+            }
+        }
         Flickable {
             vertical-stretch: 1;
             content-width: self.width;
@@ -2595,6 +2789,8 @@ component PickerSheet inherits Rectangle {
             pick-list := VerticalLayout {
                 alignment: start;
                 for row[i] in AppState.servers: HorizontalLayout {
+                    visible: !AppState.picker-hidden[i];
+                    height: AppState.picker-hidden[i] ? 0px : self.preferred-height;
                     padding-left: 6px;
                     padding-right: 6px;
                     ServerItem {
@@ -3124,35 +3320,64 @@ component ReportSheet inherits Rectangle {
     }
 }
 
-// A newer DUORAY: downloading, or ready to install. Shown like ExpiryBanner.
+// A newer DUORAY, as MaterialXray shows it: the whole card is the button
+// (download, then the system installer), a bar while it downloads. Shown
+// like ExpiryBanner.
 component UpdateBanner inherits Rectangle {
     in property <bool> show;
     visible: root.show;
-    height: root.show ? max(48px, self.preferred-height) : 0px;
-    background: Theme.accent.with-alpha(0.14);
+    height: root.show ? self.preferred-height : 0px;
+    background: touch.pressed ? Theme.tonal.darker(0.1) : Theme.tonal;
     border-radius: Theme.radius;
-    border-width: 1px;
-    border-color: Theme.accent.with-alpha(0.4);
-    HorizontalLayout {
-        padding: 6px;
-        padding-left: 14px;
-        spacing: 6px;
-        Text {
-            text: AppState.update-banner;
-            font-size: Theme.fs-small;
-            font-weight: 600;
-            wrap: word-wrap;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
+    touch := TouchArea {
+        enabled: AppState.update-progress < 0;
+        clicked => {
+            Actions.update-clicked();
         }
-        if AppState.update-button != "": VerticalLayout {
+    }
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 12px;
+        VerticalLayout {
             alignment: center;
-            Button {
-                text: AppState.update-button;
-                primary: true;
-                height: 36px;
-                clicked => {
-                    Actions.update-clicked();
+            Image {
+                source: @image-url("icons/system-update.svg");
+                width: 24px;
+                height: 24px;
+                colorize: Theme.on-tonal;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: AppState.update-banner;
+                font-size: Theme.fs-body;
+                font-weight: 700;
+                color: Theme.on-tonal;
+            }
+            Text {
+                text: AppState.update-detail;
+                font-size: Theme.fs-small;
+                color: Theme.on-tonal;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                height: AppState.update-progress >= 0 ? 10px : 0px;
+                visible: AppState.update-progress >= 0;
+                Rectangle {
+                    y: 6px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.on-tonal.with-alpha(0.2);
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * max(0, AppState.update-progress);
+                        border-radius: 2px;
+                        background: Theme.accent;
+                        animate width { duration: 200ms; }
+                    }
                 }
             }
         }
@@ -3268,7 +3493,40 @@ export component AppWindow inherits Window {
     init => {
         Palette.color-scheme = root.scheme == 0 ? ColorScheme.unknown : root.scheme == 2 ? ColorScheme.light : ColorScheme.dark;
     }
-    // Android's back button closes what is open before leaving the app.
+    // Back closes what is open before leaving the app. Called from Rust for
+    // Android's back gesture (whatever has the focus) and from the key below.
+    public function go-back() -> bool {
+        if (AppState.consent-open) {
+            // An answer is needed.
+        } else if (AppState.report-open) {
+            if (!AppState.report-busy) {
+                AppState.report-open = false;
+            }
+        } else if (root.qr-open) {
+            root.qr-open = false;
+        } else if (root.identity-open) {
+            root.identity-open = false;
+        } else if (root.sub-menu) {
+            root.sub-menu = false;
+        } else if (root.adding) {
+            root.adding = false;
+        } else if (root.picking >= 0) {
+            root.picking = -1;
+        } else if (root.confirm-remove) {
+            root.confirm-remove = false;
+        } else if (root.server-open) {
+            root.server-open = false;
+        } else if (root.cores-open) {
+            root.cores-open = false;
+        } else if (root.apps-open) {
+            root.apps-open = false;
+        } else if (root.page != 0) {
+            root.page = 0;
+        } else {
+            return false;
+        }
+        true
+    }
     forward-focus: back-keys;
     back-keys := FocusScope {
         width: 0px;
@@ -3277,36 +3535,10 @@ export component AppWindow inherits Window {
             if (event.text != Key.Back && event.text != Key.Escape) {
                 return reject;
             }
-            if (AppState.consent-open) {
-                // An answer is needed.
-            } else if (AppState.report-open) {
-                if (!AppState.report-busy) {
-                    AppState.report-open = false;
-                }
-            } else if (root.qr-open) {
-                root.qr-open = false;
-            } else if (root.identity-open) {
-                root.identity-open = false;
-            } else if (root.sub-menu) {
-                root.sub-menu = false;
-            } else if (root.adding) {
-                root.adding = false;
-            } else if (root.picking >= 0) {
-                root.picking = -1;
-            } else if (root.confirm-remove) {
-                root.confirm-remove = false;
-            } else if (root.server-open) {
-                root.server-open = false;
-            } else if (root.cores-open) {
-                root.cores-open = false;
-            } else if (root.apps-open) {
-                root.apps-open = false;
-            } else if (root.page != 0) {
-                root.page = 0;
-            } else {
-                return reject;
+            if (root.go-back()) {
+                return accept;
             }
-            accept
+            reject
         }
     }
 

@@ -14,7 +14,10 @@ android {
         applicationId = "space.dualizm.duoray"
         // The Slint Android backend needs API 26.
         minSdk = 26
-        targetSdk = 37
+        // 37 turns on Android 17's local network protection: xray's direct
+        // connections to the LAN («Локальная сеть» напрямую) and the hotspot
+        // proxy would need a runtime permission. MaterialXray stays on 36 too.
+        targetSdk = 36
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = (findProperty("versionName") as String?) ?: "0.1.0"
         // With -PabiSplit=true the split below picks the ABIs instead.

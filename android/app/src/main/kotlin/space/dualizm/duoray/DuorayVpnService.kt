@@ -56,12 +56,29 @@ class DuorayVpnService : VpnService() {
             .setSession(getString(R.string.app_name))
             .setMtu(MTU)
             .addAddress(ADDRESS, 30)
-            .addRoute("0.0.0.0", 0)
             .addDnsServer(DNS)
+        for ((address, prefix) in routes(excludeLan())) builder.addRoute(address, prefix)
         applyAppRules(builder)
         if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
         builder.establish()
     }.getOrNull()
+
+    /**
+     * The local network stays off the VPN with «Локальная сеть» напрямую or
+     * «Доступ через хотспот» on: the router, printers and the devices using
+     * the phone as a proxy are reached directly, and answers to them do not
+     * vanish into the tunnel (Android routes them by the VPN's uid rules).
+     */
+    private fun excludeLan(): Boolean {
+        val share = runCatching {
+            JSONObject(File(filesDir, "mobile.json").readText()).optJSONObject("share")?.optBoolean("enabled") == true
+        }.getOrDefault(false)
+        val lan = runCatching {
+            JSONObject(File(filesDir, "store.json").readText())
+                .optJSONObject("settings")?.optJSONObject("routing")?.optJSONObject("simple")?.optBoolean("lan_direct") == true
+        }.getOrDefault(false)
+        return share || lan
+    }
 
     /**
      * Per-app rules from mobile.json (src/settings.rs): every app, every app
@@ -71,7 +88,9 @@ class DuorayVpnService : VpnService() {
     private fun applyAppRules(builder: Builder) {
         val apps = runCatching { JSONObject(File(filesDir, "mobile.json").readText()).optJSONObject("apps") }.getOrNull()
         val mode = apps?.optString("mode") ?: "all"
-        val packages = apps?.optJSONArray("packages")?.let { list -> (0 until list.length()).map { list.getString(it) } }.orEmpty()
+        // Each mode keeps its own list (src/settings.rs); "packages" is the old shared one.
+        fun list(name: String) = apps?.optJSONArray(name)?.let { l -> (0 until l.length()).map { l.getString(it) } }.orEmpty()
+        val packages = list(mode).ifEmpty { list("packages") }
         if (mode == "only") {
             val added = packages.count { pkg -> pkg != packageName && runCatching { builder.addAllowedApplication(pkg) }.isSuccess }
             if (added > 0) return
@@ -121,6 +140,11 @@ class DuorayVpnService : VpnService() {
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.channel_vpn), NotificationManager.IMPORTANCE_LOW),
         )
+        // «Свернуть уведомление»: Android needs one while the VPN runs; this
+        // channel keeps it folded at the bottom of the shade, no status bar icon.
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_QUIET, getString(R.string.channel_quiet), NotificationManager.IMPORTANCE_MIN),
+        )
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -151,7 +175,7 @@ class DuorayVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE,
         )
         val title = status.title.ifEmpty { getString(R.string.notification_connected) }
-        val builder = NotificationCompat.Builder(this, CHANNEL)
+        val builder = NotificationCompat.Builder(this, if (status.quiet) CHANNEL_QUIET else CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_duoray)
             .setContentTitle(title)
             .setContentText(status.text.ifEmpty { null })
@@ -168,7 +192,7 @@ class DuorayVpnService : VpnService() {
         } else {
             builder.setShowWhen(false)
         }
-        if (status.state == 2 && status.promote) {
+        if (status.state == 2 && status.promote && !status.quiet) {
             builder.setRequestPromotedOngoing(true)
             builder.setShortCriticalText(status.chip.ifEmpty { "VPN" })
         }
@@ -176,12 +200,44 @@ class DuorayVpnService : VpnService() {
     }
 
     companion object {
+        /** Private and link-local ranges, kept off the VPN by excludeLan. */
+        private val LAN = listOf("10.0.0.0" to 8, "172.16.0.0" to 12, "192.168.0.0" to 16, "169.254.0.0" to 16)
+
+        /**
+         * IPv4 routes into the TUN: everything, or everything but LAN as the
+         * smallest set of prefixes (Builder.excludeRoute needs Android 13).
+         */
+        fun routes(excludeLan: Boolean): List<Pair<String, Int>> {
+            if (!excludeLan) return listOf("0.0.0.0" to 0)
+            fun ip(s: String) = s.split('.').fold(0L) { acc, part -> (acc shl 8) or part.toLong() }
+            val holes = LAN.map { (a, p) -> ip(a) to p }
+            fun inside(start: Long, prefix: Int, hole: Pair<Long, Int>) =
+                hole.second <= prefix && (start ushr (32 - hole.second)) == (hole.first ushr (32 - hole.second))
+            fun overlaps(start: Long, prefix: Int, hole: Pair<Long, Int>) =
+                inside(start, prefix, hole) || (prefix <= hole.second && (hole.first ushr (32 - prefix).coerceAtMost(32)) == (start ushr (32 - prefix).coerceAtMost(32)))
+            val out = mutableListOf<Pair<String, Int>>()
+            fun walk(start: Long, prefix: Int) {
+                when {
+                    holes.any { inside(start, prefix, it) } -> return
+                    holes.none { overlaps(start, prefix, it) } ->
+                        out += listOf(24, 16, 8, 0).joinToString(".") { ((start ushr it) and 0xff).toString() } to prefix
+                    else -> {
+                        walk(start, prefix + 1)
+                        walk(start or (1L shl (31 - prefix)), prefix + 1)
+                    }
+                }
+            }
+            walk(0, 0)
+            return out
+        }
+
         /** The running service, for Rust's status updates. */
         var instance: DuorayVpnService? = null
             private set
 
         private const val ACTION_STOP = "space.dualizm.duoray.STOP"
         private const val CHANNEL = "vpn"
+        private const val CHANNEL_QUIET = "vpn_quiet"
         private const val NOTIFICATION_ID = 1
 
         // Must match TUN_MTU in src/service.rs.

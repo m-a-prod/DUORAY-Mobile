@@ -29,6 +29,10 @@ pub trait Platform: Send + Sync {
     /// Whether the window takes the system Back (a sheet or a page is open);
     /// otherwise Back leaves the app, with the system's predictive animation.
     fn set_back_enabled(&self, _on: bool) {}
+    /// Android 17's local network permission (the hotspot proxy needs it).
+    fn request_local_network(&self) {}
+    /// Android's dialog that lets DUORAY run in the background unrestricted.
+    fn request_background(&self) {}
     /// Dark status and navigation bar icons over a light theme.
     fn set_light_bars(&self, _light: bool) {}
     /// A system settings screen: "vpn", "location" or "app" (this app's).

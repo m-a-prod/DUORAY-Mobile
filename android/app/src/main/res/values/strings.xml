@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">DUORAY</string>
     <string name="channel_vpn">Подключение</string>
+    <string name="channel_quiet">Подключение (свёрнуто)</string>
     <string name="notification_connected">Подключено</string>
     <string name="action_disconnect">Отключить</string>
     <string name="tile_connecting">Подключение…</string>

@@ -135,6 +135,14 @@ impl Platform for Android {
         call_bool(&ACTIVITY, jni_str!("setBackEnabled"), on);
     }
 
+    fn request_local_network(&self) {
+        call(&ACTIVITY, jni_str!("requestLocalNetwork"), None);
+    }
+
+    fn request_background(&self) {
+        call(&ACTIVITY, jni_str!("requestBackground"), None);
+    }
+
     fn set_light_bars(&self, light: bool) {
         call_bool(&ACTIVITY, jni_str!("setLightBars"), light);
     }
@@ -335,6 +343,28 @@ pub extern "system" fn Java_space_dualizm_duoray_Native_toggle<'a>(mut env: EnvU
 pub extern "system" fn Java_space_dualizm_duoray_Native_wifiAccess<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, code: jint) {
     env.with_env(|_env| -> jni::errors::Result<()> {
         service::set_wifi_access(code.clamp(0, 3) as u8);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `Native.batteryUnrestricted(on)`: whether Android leaves DUORAY alone in
+/// the background (battery optimization off).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_batteryUnrestricted<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, on: jboolean) {
+    env.with_env(|_env| -> jni::errors::Result<()> {
+        crate::app::set_battery_unrestricted(on);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `Native.localNetwork(granted)`: Android 17's permission for the LAN,
+/// which the hotspot proxy needs.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_localNetwork<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, granted: jboolean) {
+    env.with_env(|_env| -> jni::errors::Result<()> {
+        crate::app::set_local_network(granted);
         Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>()
