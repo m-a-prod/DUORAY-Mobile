@@ -187,6 +187,17 @@ export global AppState {
     in property <int> ping-threads: 8;
     in property <int> ping-timeout: 5000;
     in property <string> ping-url;
+    // Identity sent with subscription requests.
+    in property <bool> send-device-info: true;
+    in property <bool> happ-enabled;
+    in property <string> happ-ua;
+    in property <string> happ-hwid;
+    // 0 Android, 1 iOS, 2 Windows, 3 macOS.
+    in property <int> happ-os;
+    // The shown subscription's own identity: 0 as in settings, 1 DUORAY, 2 Happ.
+    in property <int> sub-id-mode;
+    in property <string> sub-hwid;
+    in property <string> sub-happ-ua;
     // 0 Default, 1 Double, 2 KeepAlive.
     in property <int> ping-proxy-mode;
     in property <bool> switch-on-select: true;
@@ -236,6 +247,15 @@ export global Actions {
     callback set-ping-threads(int);
     callback set-ping-timeout(int);
     callback set-ping-url(string);
+    callback set-send-device-info(bool);
+    callback set-happ(bool);
+    callback set-happ-os(int);
+    callback happ-new-ids();
+    callback happ-new-device();
+    callback set-sub-id-mode(int);
+    callback set-sub-hwid(string);
+    callback sub-random-hwid();
+    callback sub-new-happ();
     callback set-ping-proxy-mode(int);
     callback set-switch-on-select(bool);
     callback set-autoconnect(bool);
@@ -1677,6 +1697,72 @@ component SettingsPage inherits Rectangle {
                     padding-left: 6px;
                     padding-top: 6px;
                     SectionLabel {
+                        text: "ПОДПИСКИ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+                        ToggleRow {
+                            title: "Отправлять HWID и данные устройства";
+                            hint: "Заголовки x-hwid, ОС и модель. Нужны панелям с лимитом устройств. Если выключить, уходит только User-Agent.";
+                            checked: AppState.send-device-info;
+                            toggled(on) => {
+                                Actions.set-send-device-info(on);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Happ Spoof";
+                            hint: "Представляться клиентом Happ — для панелей, которые отдают подписку только ему. По умолчанию DUORAY представляется собой.";
+                            checked: AppState.happ-enabled;
+                            toggled(on) => {
+                                Actions.set-happ(on);
+                            }
+                        }
+                        if AppState.happ-enabled: VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 4px;
+                                for os[i] in ["Android", "iOS", "Windows", "macOS"]: Segment {
+                                    text: os;
+                                    active: AppState.happ-os == i;
+                                    clicked => {
+                                        Actions.set-happ-os(i);
+                                    }
+                                }
+                            }
+                            Text {
+                                text: AppState.happ-ua + "\nHWID " + AppState.happ-hwid;
+                                font-family: "monospace";
+                                font-size: Theme.fs-caption;
+                                color: Theme.muted;
+                                wrap: char-wrap;
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Button {
+                                    text: "Новые ID";
+                                    horizontal-stretch: 1;
+                                    clicked => {
+                                        Actions.happ-new-ids();
+                                    }
+                                }
+                                Button {
+                                    text: "Другое устройство";
+                                    horizontal-stretch: 1;
+                                    clicked => {
+                                        Actions.happ-new-device();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
                         text: "ПИНГ";
                     }
                 }
@@ -2134,6 +2220,7 @@ component SubMenuSheet inherits Rectangle {
     in property <length> bottom-inset;
     callback close();
     callback remove();
+    callback identity();
     background: Theme.shadow;
     TouchArea {
         clicked => {
@@ -2175,6 +2262,7 @@ component SubMenuSheet inherits Rectangle {
             for item[i] in [
                 { text: "Подключиться к самому быстрому", danger: false },
                 { text: "Скопировать ссылку", danger: false },
+                { text: "Подмена HWID", danger: false },
                 { text: "Удалить подписку", danger: true },
             ]: Rectangle {
                 height: 52px;
@@ -2187,6 +2275,8 @@ component SubMenuSheet inherits Rectangle {
                             Actions.connect-fastest();
                         } else if (i == 1) {
                             Actions.copy-link();
+                        } else if (i == 2) {
+                            root.identity();
                         } else {
                             root.remove();
                         }
@@ -2199,6 +2289,108 @@ component SubMenuSheet inherits Rectangle {
                         font-size: Theme.fs-body;
                         color: item.danger ? Theme.danger : Theme.fg;
                         vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// "Подмена HWID": how the shown subscription identifies itself to its panel.
+component IdentitySheet inherits Rectangle {
+    in property <length> bottom-inset;
+    callback close();
+    background: Theme.shadow;
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: box.preferred-height;
+        background: Theme.card;
+        border-radius: 22px;
+        border-width: 1px;
+        border-color: Theme.outline;
+        TouchArea { }
+        box := VerticalLayout {
+            padding: 16px;
+            padding-bottom: max(root.bottom-inset, 12px) + 12px;
+            spacing: 10px;
+            Text {
+                text: "Подмена HWID · " + AppState.header-title;
+                font-size: Theme.fs-title;
+                font-weight: 700;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                for mode[i] in ["Как в настройках", "DUORAY", "Happ"]: Segment {
+                    text: mode;
+                    active: AppState.sub-id-mode == i;
+                    clicked => {
+                        Actions.set-sub-id-mode(i);
+                    }
+                }
+            }
+            Text {
+                text: AppState.sub-id-mode == 0 ? "Подписка представляется так же, как в настройках." : AppState.sub-id-mode == 1 ? "DUORAY со своим HWID для этой панели: новое устройство в лимите, когда старое заблокировано." : "Свой отпечаток Happ для этой панели:";
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+            if AppState.sub-id-mode == 1: HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 42px;
+                    border-radius: 10px;
+                    background: Theme.bg;
+                    border-width: hwid-input.has-focus ? 2px : 1px;
+                    border-color: hwid-input.has-focus ? Theme.accent : Theme.line;
+                    hwid-input := TextInput {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height;
+                        vertical-alignment: center;
+                        single-line: true;
+                        text: AppState.sub-hwid;
+                        font-family: "monospace";
+                        font-size: Theme.fs-caption;
+                        color: Theme.fg;
+                        edited => {
+                            Actions.set-sub-hwid(self.text);
+                        }
+                    }
+                    if hwid-input.text == "": Text {
+                        x: 12px;
+                        text: "HWID устройства";
+                        font-size: Theme.fs-caption;
+                        color: Theme.muted;
+                        vertical-alignment: center;
+                    }
+                }
+                Button {
+                    text: "Случайный";
+                    clicked => {
+                        Actions.sub-random-hwid();
+                    }
+                }
+            }
+            if AppState.sub-id-mode == 2: VerticalLayout {
+                spacing: 8px;
+                Text {
+                    text: AppState.sub-happ-ua;
+                    font-family: "monospace";
+                    font-size: Theme.fs-caption;
+                    color: Theme.muted;
+                    wrap: char-wrap;
+                }
+                Button {
+                    text: "Новое устройство";
+                    clicked => {
+                        Actions.sub-new-happ();
                     }
                 }
             }
@@ -2271,6 +2463,7 @@ export component AppWindow inherits Window {
     in-out property <int> picking: -1;
     in-out property <bool> confirm-remove;
     in-out property <bool> sub-menu;
+    in-out property <bool> identity-open;
     property <length> top: root.safe-area-insets.top;
     property <length> bottom: root.safe-area-insets.bottom;
     // Std-widget defaults (text without its own color, spinners) follow the
@@ -2291,7 +2484,9 @@ export component AppWindow inherits Window {
             if (event.text != Key.Back && event.text != Key.Escape) {
                 return reject;
             }
-            if (root.sub-menu) {
+            if (root.identity-open) {
+                root.identity-open = false;
+            } else if (root.sub-menu) {
                 root.sub-menu = false;
             } else if (root.adding) {
                 root.adding = false;
@@ -2514,6 +2709,15 @@ export component AppWindow inherits Window {
         }
         remove => {
             root.confirm-remove = true;
+        }
+        identity => {
+            root.identity-open = true;
+        }
+    }
+    if root.identity-open: IdentitySheet {
+        bottom-inset: root.bottom;
+        close => {
+            root.identity-open = false;
         }
     }
     if root.confirm-remove: ConfirmSheet {

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use duoray_core::balancer::{self, Trace};
-use duoray_core::identity;
+use duoray_core::identity::{self, SubIdentityMode};
 use duoray_core::server::{Server, display_name};
 use duoray_core::store::{self, PingMode, ProxyPingMode, Store, Subscription};
 use duoray_core::subscription;
@@ -281,6 +281,40 @@ fn wire(ui: &AppWindow) {
             app.render_settings();
         })
     });
+    a.on_set_send_device_info(|on| with_app(|app| app.edit_settings(|s| s.send_device_info = on)));
+    a.on_set_happ(|on| with_app(|app| app.edit_settings(|s| s.happ.enabled = on)));
+    a.on_set_happ_os(|i| with_app(|app| app.edit_settings(|s| s.happ.os = HAPP_OS[(i as usize).min(3)].into())));
+    a.on_happ_new_ids(|| with_app(|app| app.edit_settings(|s| s.happ.randomize_ids())));
+    a.on_happ_new_device(|| with_app(|app| app.edit_settings(|s| s.happ.randomize_device())));
+    a.on_set_sub_id_mode(|m| {
+        with_app(|app| {
+            let global = app.store.settings.happ.clone();
+            app.edit_identity(|id| {
+                id.mode = match m {
+                    1 => SubIdentityMode::Duoray,
+                    2 => SubIdentityMode::Happ,
+                    _ => SubIdentityMode::Settings,
+                };
+                if id.mode == SubIdentityMode::Happ && id.happ.is_none() {
+                    let mut own = global;
+                    own.enabled = true;
+                    own.randomize_ids();
+                    id.happ = Some(own);
+                }
+            })
+        })
+    });
+    a.on_set_sub_hwid(|hwid| with_app(|app| app.edit_identity(|id| id.hwid = hwid.trim().to_string())));
+    a.on_sub_random_hwid(|| with_app(|app| app.edit_identity(|id| id.hwid = identity::random_device_hwid())));
+    a.on_sub_new_happ(|| {
+        with_app(|app| {
+            app.edit_identity(|id| {
+                if let Some(h) = id.happ.as_mut() {
+                    h.randomize_device();
+                }
+            })
+        })
+    });
     a.on_set_switch_on_select(|on| {
         with_app(|app| {
             app.store.settings.switch_on_select = on;
@@ -379,6 +413,21 @@ impl App {
         }
     }
 
+    /// Changes the app-wide store settings and shows the result.
+    fn edit_settings(&mut self, edit: impl FnOnce(&mut store::Settings)) {
+        edit(&mut self.store.settings);
+        self.save_store();
+        self.render_settings();
+    }
+
+    /// Changes the shown subscription's own identity (its next update uses it).
+    fn edit_identity(&mut self, edit: impl FnOnce(&mut identity::SubIdentity)) {
+        let Some(i) = self.current else { return };
+        edit(&mut self.store.subscriptions[i].identity);
+        self.save_store();
+        self.render_header();
+    }
+
     fn save_settings(&mut self) {
         if let Err(e) = self.settings.save(&self.host.settings()) {
             self.toast(format!("Не удалось сохранить: {e:#}"));
@@ -460,6 +509,13 @@ impl App {
         st.set_has_support(sub.info.support_url.is_some());
         st.set_sub_error(sub.last_error.as_deref().map(servers::humanize).unwrap_or_default().into());
         st.set_busy(self.refreshing.contains(&sub.id));
+        st.set_sub_id_mode(match sub.identity.mode {
+            SubIdentityMode::Settings => 0,
+            SubIdentityMode::Duoray => 1,
+            SubIdentityMode::Happ => 2,
+        });
+        st.set_sub_hwid(sub.identity.hwid.clone().into());
+        st.set_sub_happ_ua(sub.identity.happ.as_ref().map(|h| format!("{}\nHWID {}", h.user_agent(), h.hwid)).unwrap_or_default().into());
         self.render_expiry();
     }
 
@@ -629,6 +685,12 @@ impl App {
         });
         st.set_ping_timeout(p.timeout_ms as i32);
         st.set_switch_on_select(self.store.settings.switch_on_select);
+        let happ = &self.store.settings.happ;
+        st.set_send_device_info(self.store.settings.send_device_info);
+        st.set_happ_enabled(happ.enabled);
+        st.set_happ_ua(happ.user_agent().into());
+        st.set_happ_hwid(happ.hwid.clone().into());
+        st.set_happ_os(HAPP_OS.iter().position(|o| *o == happ.os).unwrap_or(0) as i32);
         st.set_autoconnect(self.store.settings.autoconnect);
         st.set_keep_connected(self.store.settings.keep_connected);
     }
@@ -1129,6 +1191,9 @@ fn prefill(text: String) {
     *PENDING_LINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
     let _ = slint::invoke_from_event_loop(|| with_app(App::take_link));
 }
+
+/// Platforms Happ Spoof can claim, in the picker's order.
+const HAPP_OS: [&str; 4] = ["Android", "iOS", "Windows", "macOS"];
 
 /// Live pings a connected server may miss before "Держать подключение"
 /// moves away from it (15 s).
