@@ -30,6 +30,8 @@ sha2 = "0.10"
 slint = { version = "1.18.1", features = ["backend-android-activity-06"] }
 ureq = { version = "3.4.2", features = ["socks-proxy", "json"] }
 url = "2.5.8"
+# Unpacking downloaded xray cores (src/core.rs).
+zip = { version = "9.4.1", default-features = false, features = ["deflate-flate2"] }
 
 [build-dependencies]
 slint-build = "1.18.1"

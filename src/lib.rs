@@ -3,6 +3,7 @@
 //! now, iOS's packet tunnel later, both through `xray.tun.fd`).
 
 mod app;
+mod core;
 mod deeplink;
 mod diag;
 mod exit;

@@ -19,6 +19,7 @@ import android.view.HapticFeedbackConstants
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -35,6 +36,7 @@ class MainActivity : NativeActivity() {
         Native.boot(this)
         NetworkWatcher.start(applicationContext)
         super.onCreate(savedInstanceState)
+        preferHighRefreshRate()
         handleLink(intent)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -74,6 +76,30 @@ class MainActivity : NativeActivity() {
             onBackInvokedDispatcher.unregisterOnBackInvokedCallback(registered)
             backCallback = null
         }
+    }
+
+    /**
+     * The fastest mode the screen has at its resolution (120 Hz and the
+     * like): with no request a NativeActivity's surface stays at 60 Hz. The
+     * system's own limit (Smooth Display, battery saver) still applies.
+     */
+    private fun preferHighRefreshRate() {
+        val display = (if (Build.VERSION.SDK_INT >= 30) display else @Suppress("DEPRECATION") windowManager.defaultDisplay) ?: return
+        val current = display.mode
+        val best = display.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .maxByOrNull { it.refreshRate } ?: return
+        window.attributes = window.attributes.apply {
+            preferredDisplayModeId = best.modeId
+            preferredRefreshRate = best.refreshRate
+        }
+    }
+
+    /** Dark bar icons over a light theme, light ones over a dark theme. */
+    fun setLightBars(light: Boolean) = runOnUiThread {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.isAppearanceLightStatusBars = light
+        controller.isAppearanceLightNavigationBars = light
     }
 
     /** "vpn" (always-on lives there), "location", or "app" (this app's permissions). */

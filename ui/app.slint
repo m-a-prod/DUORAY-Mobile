@@ -38,6 +38,16 @@ export struct SsidRow {
     server: string,
 }
 
+// One xray core: the bundled one (tag ""), an installed or a downloadable release.
+export struct CoreRow {
+    tag: string,
+    detail: string,
+    pre: bool,
+    installed: bool,
+    selected: bool,
+    progress: string,
+}
+
 export struct AppRow {
     icon: image,
     has-icon: bool,
@@ -188,6 +198,11 @@ export global AppState {
     in property <int> mobile-ping-threads: 1;
     in property <bool> background-stats: true;
     in property <bool> live-update: true;
+    // «Ядро Xray».
+    in property <string> core-label;
+    in property <[CoreRow]> cores;
+    in property <bool> cores-loading;
+    in property <string> cores-error;
     // Reading Wi-Fi names: 0 no location access, 1 approximate only,
     // 2 precise but location off, 3 readable.
     in property <int> wifi-access: 3;
@@ -274,9 +289,15 @@ export global Actions {
     callback set-mobile-ping-threads(int);
     callback set-background-stats(bool);
     callback set-live-update(bool);
+    callback open-cores();
+    callback install-core(string);
+    callback select-core(string);
+    callback remove-core(string);
     // Whether the window takes the system Back (src/platform: predictive back).
     callback back-state(bool);
     callback open-settings(string);
+    // The theme is light: Android draws the bar icons dark.
+    callback light-bars(bool);
     callback set-ping-timeout(int);
     callback set-ping-url(string);
     callback set-send-device-info(bool);
@@ -1711,6 +1732,7 @@ component ThemeTile inherits Rectangle {
 
 component SettingsPage inherits Rectangle {
     in property <length> bottom-inset;
+    callback cores();
     background: Theme.bg;
     VerticalLayout {
         PageTitle {
@@ -2141,6 +2163,35 @@ component SettingsPage inherits Rectangle {
                     padding-left: 6px;
                     padding-top: 6px;
                     SectionLabel {
+                        text: "ЯДРО XRAY";
+                    }
+                }
+                Card {
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            Text {
+                                text: AppState.core-label;
+                                font-size: Theme.fs-body;
+                                font-weight: 600;
+                                overflow: elide;
+                            }
+                        }
+                        Button {
+                            text: "Выбрать";
+                            clicked => {
+                                root.cores();
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
                         text: "ЖУРНАЛ XRAY";
                     }
                 }
@@ -2220,6 +2271,156 @@ component SettingsPage inherits Rectangle {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// «Ядро Xray»: the bundled core, installed releases and the ones on GitHub,
+// as MaterialXray picks its core.
+component CoreItem inherits Rectangle {
+    in property <CoreRow> core;
+    height: 62px * Theme.text-scale;
+    background: touch.pressed && root.core.installed ? Theme.fg.with-alpha(0.06) : transparent;
+    touch := TouchArea {
+        enabled: root.core.installed && !root.core.selected;
+        clicked => {
+            Actions.select-core(root.core.tag);
+        }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 8px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            width: 20px;
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: 10px;
+                border-width: 2px;
+                border-color: root.core.selected ? Theme.accent : Theme.line;
+                opacity: root.core.installed ? 1 : 0.3;
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: Theme.accent;
+                    opacity: root.core.selected ? 1 : 0;
+                }
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.core.tag == "" ? "Встроенное" : root.core.tag;
+                    font-size: Theme.fs-body;
+                    font-weight: 600;
+                    overflow: elide;
+                    horizontal-stretch: 0;
+                }
+                if root.core.pre: Chip {
+                    text: "пре-релиз";
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+            Text {
+                text: root.core.detail;
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                overflow: elide;
+            }
+        }
+        if root.core.progress != "": VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.core.progress;
+                font-size: Theme.fs-small;
+                color: Theme.muted;
+            }
+        }
+        if !root.core.installed && root.core.progress == "": VerticalLayout {
+            alignment: center;
+            Button {
+                text: "Скачать";
+                height: 36px;
+                clicked => {
+                    Actions.install-core(root.core.tag);
+                }
+            }
+        }
+        if root.core.installed && !root.core.selected && root.core.tag != "": VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.delete;
+                label: "Удалить " + root.core.tag;
+                clicked => {
+                    Actions.remove-core(root.core.tag);
+                }
+            }
+        }
+    }
+}
+
+component CoresPage inherits Rectangle {
+    in property <length> bottom-inset;
+    callback back();
+    background: Theme.bg;
+    TouchArea { }
+    VerticalLayout {
+        PageHeader {
+            text: "Ядро Xray";
+            back => {
+                root.back();
+            }
+        }
+        Flickable {
+            vertical-stretch: 1;
+            content-width: self.width;
+            content-height: list.preferred-height;
+            list := VerticalLayout {
+                alignment: start;
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: root.bottom-inset + 16px;
+                spacing: 10px;
+                Text {
+                    text: "Встроенное ядро обновляется вместе с DUORAY. Другую версию можно скачать из релизов XTLS/Xray-core на GitHub: перед установкой она сверяется с контрольной суммой релиза. Смена ядра переподключает VPN.";
+                    font-size: Theme.fs-caption;
+                    color: Theme.muted;
+                    wrap: word-wrap;
+                }
+                if AppState.cores-error != "": Text {
+                    text: AppState.cores-error;
+                    font-size: Theme.fs-caption;
+                    color: Theme.danger;
+                    wrap: word-wrap;
+                }
+                Card {
+                    VerticalLayout {
+                        for core[i] in AppState.cores: VerticalLayout {
+                            if i > 0: Divider { }
+                            CoreItem {
+                                core: core;
+                            }
+                        }
+                    }
+                }
+                if AppState.cores-loading: HorizontalLayout {
+                    alignment: center;
+                    Spinner {
+                        width: 28px;
+                        height: 28px;
+                        indeterminate: true;
                     }
                 }
             }
@@ -3016,6 +3217,7 @@ export component AppWindow inherits Window {
     // 0 servers, 1 routing, 2 settings; the apps list opens over routing.
     in-out property <int> page;
     in-out property <bool> apps-open;
+    in-out property <bool> cores-open;
     in-out property <bool> adding;
     // Rust opens the add sheet for a duoray:// link.
     callback open-add();
@@ -3034,9 +3236,14 @@ export component AppWindow inherits Window {
     // Back belongs to the system, which then plays its predictive animation.
     out property <bool> can-go-back: AppState.consent-open || AppState.report-open || root.qr-open || root.identity-open
         || root.sub-menu || root.adding || root.picking >= 0 || root.confirm-remove || root.server-open || root.apps-open
+        || root.cores-open
         || root.page != 0;
     changed can-go-back => {
         Actions.back-state(self.can-go-back);
+    }
+    out property <bool> light-theme: Theme.light;
+    changed light-theme => {
+        Actions.light-bars(self.light-theme);
     }
     callback open-server-page();
     open-server-page => {
@@ -3090,6 +3297,8 @@ export component AppWindow inherits Window {
                 root.confirm-remove = false;
             } else if (root.server-open) {
                 root.server-open = false;
+            } else if (root.cores-open) {
+                root.cores-open = false;
             } else if (root.apps-open) {
                 root.apps-open = false;
             } else if (root.page != 0) {
@@ -3220,6 +3429,10 @@ export component AppWindow inherits Window {
         }
         if root.page == 2: SettingsPage {
             vertical-stretch: 1;
+            cores => {
+                root.cores-open = true;
+                Actions.open-cores();
+            }
         }
         // The bottom bar: no outline, its sides would sit on the curved edges
         // of the screen (only the OLED palette has one).
@@ -3258,7 +3471,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.page == 0 && !root.apps-open && !root.server-open: ConnectionCard {
+    if root.page == 0 && !root.apps-open && !root.server-open && !root.cores-open: ConnectionCard {
         x: 12px + root.safe-area-insets.left;
         width: parent.width - 24px - root.safe-area-insets.left - root.safe-area-insets.right;
         y: parent.height - (64px + max(root.bottom, 8px)) - self.height - 10px;
@@ -3269,6 +3482,14 @@ export component AppWindow inherits Window {
         bottom-inset: root.bottom;
         back => {
             root.server-open = false;
+        }
+    }
+    if root.cores-open: CoresPage {
+        y: root.top;
+        height: parent.height - root.top;
+        bottom-inset: root.bottom;
+        back => {
+            root.cores-open = false;
         }
     }
     if root.apps-open: AppsPage {

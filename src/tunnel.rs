@@ -102,7 +102,7 @@ pub fn spawn(paths: &Paths, tun_fd: RawFd, on_exit: impl FnOnce(Exit) + Send + '
 
 fn spawn_with(paths: &Paths, child_fd: RawFd, on_exit: impl FnOnce(Exit) + Send + 'static) -> Result<Xray> {
     let log = File::create(&paths.log).context("журнал xray")?;
-    let mut cmd = Command::new(&paths.xray);
+    let mut cmd = xray_command(&paths.xray);
     cmd.args(["run", "-c"])
         .arg(&paths.config)
         .env("xray.tun.fd", child_fd.to_string())
@@ -144,8 +144,32 @@ fn spawn_with(paths: &Paths, child_fd: RawFd, on_exit: impl FnOnce(Exit) + Send 
 
 /// Starts a throwaway xray without a TUN (pings go through one); the caller
 /// kills it.
+/// A core the user picked (src/core.rs) instead of the bundled one.
+static SELECTED: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+pub fn select_core(path: Option<PathBuf>) {
+    *SELECTED.write().unwrap_or_else(|e| e.into_inner()) = path;
+}
+
+/// The command that runs xray: the bundled one directly; a downloaded core
+/// through the system linker, as Android runs no executable from app data.
+pub fn xray_command(bundled: &Path) -> Command {
+    let selected = SELECTED.read().unwrap_or_else(|e| e.into_inner()).clone().filter(|p| p.is_file());
+    match selected {
+        #[cfg(target_os = "android")]
+        Some(core) => {
+            let mut cmd = Command::new(if cfg!(target_pointer_width = "64") { "/system/bin/linker64" } else { "/system/bin/linker" });
+            cmd.arg(core);
+            cmd
+        }
+        #[cfg(not(target_os = "android"))]
+        Some(core) => Command::new(core),
+        None => Command::new(bundled),
+    }
+}
+
 pub fn spawn_plain(xray: &Path, assets: &Path, config: &Path) -> Result<Child> {
-    let mut cmd = Command::new(xray);
+    let mut cmd = xray_command(xray);
     cmd.args(["run", "-c"])
         .arg(config)
         .env("XRAY_LOCATION_ASSET", assets)
@@ -165,7 +189,7 @@ pub fn spawn_plain(xray: &Path, assets: &Path, config: &Path) -> Result<Child> {
 
 /// `xray api <args>` against a running xray's API; its standard output.
 pub fn api(xray: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new(xray).arg("api").args(args).stdin(Stdio::null()).output().context("xray api")?;
+    let out = xray_command(xray).arg("api").args(args).stdin(Stdio::null()).output().context("xray api")?;
     if !out.status.success() {
         bail!("xray api: {}", String::from_utf8_lossy(&out.stderr).trim());
     }

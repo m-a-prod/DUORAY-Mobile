@@ -135,6 +135,10 @@ impl Platform for Android {
         call_bool(&ACTIVITY, jni_str!("setBackEnabled"), on);
     }
 
+    fn set_light_bars(&self, light: bool) {
+        call_bool(&ACTIVITY, jni_str!("setLightBars"), light);
+    }
+
     fn open_settings(&self, which: &str) {
         call(&ACTIVITY, jni_str!("openSettings"), Some(which));
     }

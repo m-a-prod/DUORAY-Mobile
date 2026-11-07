@@ -24,6 +24,7 @@ use crate::service::{self, Host, Snapshot, Status};
 use crate::settings::{AppMode, MobileSettings};
 use crate::{Actions, AppRow, AppState, AppWindow, ServerRow, SsidRow, SubItem, flags, ping, servers, themes, tunnel};
 
+mod cores;
 mod support;
 
 type PingResult = Result<Duration, String>;
@@ -60,6 +61,7 @@ struct App {
     apps: Vec<AppInfo>,
     apps_filter: String,
     update: UpdateState,
+    cores: cores::Cores,
     toast_timer: slint::Timer,
     poll_timer: slint::Timer,
     update_timer: slint::Timer,
@@ -144,6 +146,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         apps: Vec::new(),
         apps_filter: String::new(),
         update: UpdateState::default(),
+        cores: cores::Cores::default(),
         toast_timer: slint::Timer::default(),
         poll_timer: slint::Timer::default(),
         update_timer: slint::Timer::default(),
@@ -180,6 +183,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
     with_app(App::take_link);
     if let Some(p) = service::platform() {
         p.set_back_enabled(ui.get_can_go_back());
+        p.set_light_bars(ui.get_light_theme());
     }
     let window = WINDOW.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     crate::status::set_window_open(true);
@@ -308,6 +312,10 @@ fn wire(ui: &AppWindow) {
             app.render_settings();
         })
     });
+    a.on_open_cores(|| with_app(App::open_cores));
+    a.on_install_core(|tag| with_app(|app| app.install_core(&tag)));
+    a.on_select_core(|tag| with_app(|app| app.select_core(&tag)));
+    a.on_remove_core(|tag| with_app(|app| app.remove_core(&tag)));
     a.on_set_live_update(|on| {
         with_app(|app| {
             app.settings.live_update = on;
@@ -323,6 +331,11 @@ fn wire(ui: &AppWindow) {
             app.save_settings();
             app.render_settings();
         })
+    });
+    a.on_light_bars(|light| {
+        if let Some(p) = service::platform() {
+            p.set_light_bars(light);
+        }
     });
     a.on_open_url(|url| {
         if let Some(p) = service::platform() {
@@ -815,6 +828,7 @@ impl App {
         st.set_mobile_ping_threads(self.settings.mobile_ping_threads as i32);
         st.set_background_stats(self.settings.background_stats);
         st.set_live_update(self.settings.live_update);
+        st.set_core_label(self.core_label().into());
         st.set_ping_url(p.url.clone().into());
         st.set_ping_proxy_mode(match p.proxy_mode {
             ProxyPingMode::Default => 0,

@@ -29,6 +29,8 @@ pub trait Platform: Send + Sync {
     /// Whether the window takes the system Back (a sheet or a page is open);
     /// otherwise Back leaves the app, with the system's predictive animation.
     fn set_back_enabled(&self, _on: bool) {}
+    /// Dark status and navigation bar icons over a light theme.
+    fn set_light_bars(&self, _light: bool) {}
     /// A system settings screen: "vpn", "location" or "app" (this app's).
     fn open_settings(&self, _which: &str) {}
     /// Hands a downloaded, verified APK to the system installer (the user
