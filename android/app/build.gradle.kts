@@ -17,8 +17,11 @@ android {
         targetSdk = 37
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
         versionName = (findProperty("versionName") as String?) ?: "0.1.0"
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+        // With -PabiSplit=true the split below picks the ABIs instead.
+        if (findProperty("abiSplit") != "true") {
+            ndk {
+                abiFilters += listOf("arm64-v8a", "x86_64")
+            }
         }
     }
 
