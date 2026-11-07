@@ -9,13 +9,14 @@
 
 use std::net::SocketAddr;
 use std::os::fd::RawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use duoray_core::balancer::{self, Balancer};
 use duoray_core::device::Device;
+use duoray_core::geo::GeoDir;
 use duoray_core::routing::{self, GeoData};
 use duoray_core::runtime;
 use duoray_core::store::Store;
@@ -63,11 +64,22 @@ impl Host {
         self.data.join("run")
     }
 
+    /// Routing databases kept fresh in `<data>/geo` (as on the desktop).
+    pub fn geo(&self) -> GeoDir {
+        GeoDir::new(&self.data)
+    }
+
+    /// geoip/geosite for xray: the updated ones once they exist, else the
+    /// ones shipped in the APK.
+    pub fn geo_assets(&self) -> PathBuf {
+        self.geo().assets().map_or_else(|| self.assets.clone(), Path::to_path_buf)
+    }
+
     fn paths(&self) -> tunnel::Paths {
         let run = self.run_dir();
         tunnel::Paths {
             xray: self.xray.clone(),
-            assets: self.assets.clone(),
+            assets: self.geo_assets(),
             config: run.join("xray.json"),
             log: run.join("xray.log"),
             pid: run.join("xray.pid"),
@@ -215,6 +227,13 @@ pub fn init(host: Host) {
         let settings = MobileSettings::load(&host.settings());
         s.policy = settings.policy;
         s.apps = settings.apps;
+        // Daily geoip (ru, ru-whitelist), weekly whitelist and game lists.
+        let (geo, bundled) = (host.geo(), host.assets.clone());
+        std::thread::spawn(move || {
+            if let Err(e) = geo.update(Some(&bundled), false) {
+                log::warn!("geo update: {e:#}");
+            }
+        });
     }
     s.host = Some(Arc::new(host));
 }
@@ -293,6 +312,20 @@ pub fn switch_if_connected(key: &str) {
     };
     if go {
         start(key.to_string());
+    }
+}
+
+/// Restarts an active connection with a fresh config (the routing changed).
+pub fn reconnect() {
+    let key = {
+        let s = lock();
+        if !s.active() {
+            return;
+        }
+        s.server.clone()
+    };
+    if let Some(key) = key {
+        start(key);
     }
 }
 
@@ -483,7 +516,7 @@ pub fn on_network(net: NetworkEnv) {
 fn write_config(host: &Host, key: &str) -> Result<Link> {
     let store = Store::load(&host.store()).context("store.json")?;
     let (_, server) = servers::find(&store, key).context("Сервер больше не найден в подписках")?;
-    let geo = GeoData::load(Some(&host.assets), None);
+    let geo = GeoData::load(Some(&host.geo_assets()), Some(&host.geo().lists()));
     let routing = runtime::Routing { settings: &store.settings.routing, geo: &geo };
     let rt = runtime::build(server, "", Some(routing))?;
     for warning in &rt.warnings {

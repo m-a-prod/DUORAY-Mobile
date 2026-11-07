@@ -174,6 +174,10 @@ export global AppState {
     in property <int> app-mode;
     in property <int> app-count;
     in property <[AppRow]> apps;
+    // Routing: the desktop's simple switches.
+    in property <bool> ru-direct;
+    in property <bool> whitelist-direct;
+    in property <bool> lan-direct: true;
     in property <bool> apps-loading;
     // Settings.
     in property <[ThemeSwatch]> themes;
@@ -216,6 +220,8 @@ export global Actions {
     callback remove-ssid(int);
     callback ask-wifi-names();
     callback load-apps();
+    // which: 0 Russian sites, 1 the mobile whitelist, 2 the local network.
+    callback set-direct(int, bool);
     callback set-app-mode(int);
     callback toggle-app(string);
     callback filter-apps(string);
@@ -1177,6 +1183,45 @@ component RoutingPage inherits Rectangle {
                 alignment: start;
                 HorizontalLayout {
                     padding-left: 6px;
+                    SectionLabel {
+                        text: "НАПРЯМУЮ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 14px;
+                        ToggleRow {
+                            title: "Российские сайты";
+                            hint: "Все российские IP-адреса и сайты .ru, .рф, .su: Госуслуги, банки, маркетплейсы, видео. Они видят вас как обычно и работают быстрее.";
+                            checked: AppState.ru-direct;
+                            toggled(on) => {
+                                Actions.set-direct(0, on);
+                            }
+                        }
+                        Divider { }
+                        ToggleRow {
+                            title: "Белый список";
+                            hint: "Только сайты из белых списков мобильных операторов: те, что открываются даже при ограничениях мобильного интернета. Остальные российские сайты пойдут через VPN.";
+                            checked: AppState.whitelist-direct;
+                            toggled(on) => {
+                                Actions.set-direct(1, on);
+                            }
+                        }
+                        Divider { }
+                        ToggleRow {
+                            title: "Локальная сеть";
+                            hint: "Роутер, принтеры, NAS и другие устройства дома или в офисе.";
+                            checked: AppState.lan-direct;
+                            toggled(on) => {
+                                Actions.set-direct(2, on);
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
                     SectionLabel {
                         text: "ПРИЛОЖЕНИЯ";
                     }

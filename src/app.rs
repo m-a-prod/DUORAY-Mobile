@@ -288,6 +288,19 @@ fn wire(ui: &AppWindow) {
         })
     });
     a.on_load_log(|| with_app(App::load_log));
+    a.on_set_direct(|which, on| {
+        with_app(|app| {
+            let simple = &mut app.store.settings.routing.simple;
+            match which {
+                0 => simple.ru_direct = on,
+                1 => simple.whitelist_direct = on,
+                _ => simple.lan_direct = on,
+            }
+            app.save_store();
+            app.render_networks();
+            service::reconnect();
+        })
+    });
     a.on_connect_fastest(|| with_app(App::connect_fastest));
     a.on_copy_link(|| {
         with_app(|app| {
@@ -567,6 +580,10 @@ impl App {
         st.set_ssid_rules(ModelRc::new(VecModel::from(rules)));
         st.set_app_mode(self.settings.apps.mode.code());
         st.set_app_count(self.settings.apps.packages.len() as i32);
+        let simple = &self.store.settings.routing.simple;
+        st.set_ru_direct(simple.ru_direct);
+        st.set_whitelist_direct(simple.whitelist_direct);
+        st.set_lan_direct(simple.lan_direct);
     }
 
     fn render_settings(&self) {
