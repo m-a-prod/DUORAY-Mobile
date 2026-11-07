@@ -102,6 +102,10 @@ impl Platform for Android {
         call(&ACTIVITY, jni_str!("requestWifiNames"), None);
     }
 
+    fn copy_text(&self, text: &str) {
+        call(&ACTIVITY, jni_str!("copyText"), Some(text));
+    }
+
     fn haptic(&self) {
         call(&ACTIVITY, jni_str!("haptic"), None);
     }

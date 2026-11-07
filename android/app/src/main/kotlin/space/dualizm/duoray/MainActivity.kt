@@ -2,6 +2,8 @@ package space.dualizm.duoray
 
 import android.Manifest
 import android.app.NativeActivity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -46,6 +48,10 @@ class MainActivity : NativeActivity() {
 
     fun haptic() = runOnUiThread {
         window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    fun copyText(text: String) = runOnUiThread {
+        getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("DUORAY", text))
     }
 
     fun openUrl(url: String) = runOnUiThread {

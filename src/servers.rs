@@ -134,9 +134,98 @@ mod tests {
     }
 
     #[test]
+    fn errors_read_as_russian() {
+        assert_eq!(humanize("GET https://x/sub: timeout: global"), "Сервер подписки не ответил вовремя.");
+        assert_eq!(humanize("this subscription is already added"), "Эта подписка уже добавлена.");
+        assert_eq!(humanize("odd\nsecond"), "odd");
+    }
+
+    #[test]
+    fn dualizm_by_host() {
+        let sub = Subscription { url: "https://vip.dualizm.space/sub/x".into(), ..Default::default() };
+        assert!(is_dualizm(&sub));
+        assert_eq!(renew_url(&sub).as_deref(), Some(BUY_URL));
+    }
+
+    #[test]
     fn sizes() {
         assert_eq!(bytes(512), "512 Б");
         assert_eq!(bytes(1536), "1.5 КБ");
         assert_eq!(bytes(153_223_000_000), "142.7 ГБ");
     }
+}
+
+/// The DUALIZM bot, where DUALIZM subscriptions are bought and renewed.
+pub const BUY_URL: &str = "https://t.me/dualizm_bot";
+
+pub fn is_dualizm(sub: &Subscription) -> bool {
+    let host = url_host(&sub.url);
+    host == "dualizm.space" || host.ends_with(".dualizm.space") || sub.info.title.as_deref().is_some_and(|t| t.to_uppercase().contains("DUALIZM"))
+}
+
+fn url_host(url: &str) -> String {
+    url.split("://").nth(1).and_then(|r| r.split(['/', ':', '?']).next()).unwrap_or_default().to_lowercase()
+}
+
+/// The reminder starts this many days before the end and lasts a week after.
+const EXPIRY_AHEAD: u64 = 3 * 86400;
+const EXPIRY_AFTER: u64 = 7 * 86400;
+
+/// The subscription closest to its end, unless its reminder was closed.
+pub fn expiring(subs: &[Subscription], now: u64) -> Option<usize> {
+    subs.iter()
+        .enumerate()
+        .filter_map(|(i, s)| s.info.expire.filter(|&e| e > 0 && s.expiry_dismissed != Some(e)).map(|e| (i, e)))
+        .filter(|&(_, e)| e < now + EXPIRY_AHEAD && e + EXPIRY_AFTER > now)
+        .min_by_key(|&(_, e)| e)
+        .map(|(i, _)| i)
+}
+
+/// "Подписка «DUALIZM» заканчивается завтра в 14:00"
+pub fn expiry_text(name: &str, expire: u64, now: u64) -> String {
+    use chrono::TimeZone;
+    if expire <= now {
+        return format!("Подписка «{name}» закончилась");
+    }
+    let local = |t: u64| chrono::Local.timestamp_opt(t as i64, 0).single();
+    let (Some(end), Some(today)) = (local(expire), local(now)) else {
+        return format!("Подписка «{name}» заканчивается {}", date(expire));
+    };
+    let when = match (end.date_naive() - today.date_naive()).num_days() {
+        0 => format!("сегодня в {}", end.format("%H:%M")),
+        1 => format!("завтра в {}", end.format("%H:%M")),
+        n => format!("через {} ({})", plural(n as usize, "день", "дня", "дней"), end.format("%d.%m")),
+    };
+    format!("Подписка «{name}» заканчивается {when}")
+}
+
+/// Where to renew: the DUALIZM bot, otherwise the panel's page or support.
+pub fn renew_url(sub: &Subscription) -> Option<String> {
+    if is_dualizm(sub) {
+        return Some(BUY_URL.to_string());
+    }
+    sub.info.web_page_url.clone().or_else(|| sub.info.support_url.clone())
+}
+
+/// The common English errors from core and its HTTP client, readable.
+pub fn humanize(e: &str) -> String {
+    let map = [
+        ("already added", "Эта подписка уже добавлена."),
+        ("not a valid URL", "Это не похоже на ссылку."),
+        ("must be http(s)", "Ссылка должна начинаться с http:// или https://."),
+        ("HTML page", "Вместо подписки пришла веб-страница. Проверьте ссылку."),
+        ("timed out", "Сервер подписки не ответил вовремя."),
+        ("timeout", "Сервер подписки не ответил вовремя."),
+        ("dns failed", "Не удалось найти сервер подписки. Проверьте интернет."),
+        ("status: 404", "Подписка не найдена (404)."),
+        ("status: 403", "Доступ к подписке запрещён (403)."),
+    ];
+    if let Some((_, app)) = e.split_once("the panel redirects to the ") {
+        let app = app.split(' ').next().unwrap_or_default();
+        return format!("Панель отдала ссылку для приложения {app}, а не подписку. Скопируйте ссылку на подписку (https://…) в личном кабинете.");
+    }
+    if let Some((_, note)) = e.split_once("a note instead of servers: ") {
+        return format!("Серверов нет, панель пишет: «{note}»");
+    }
+    map.iter().find(|(needle, _)| e.contains(needle)).map_or_else(|| e.lines().next().unwrap_or_default().to_string(), |(_, text)| text.to_string())
 }

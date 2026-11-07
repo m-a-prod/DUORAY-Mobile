@@ -18,6 +18,7 @@ pub trait Platform: Send + Sync {
     /// Asks for what lets the app read Wi-Fi names (location on Android).
     fn request_wifi_names(&self) {}
     fn open_url(&self, _url: &str) {}
+    fn copy_text(&self, _text: &str) {}
     /// A short tick of the vibration motor (long press feedback).
     fn haptic(&self) {}
     /// Apps the user can route, for the per-app list. May block.

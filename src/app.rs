@@ -288,6 +288,38 @@ fn wire(ui: &AppWindow) {
         })
     });
     a.on_load_log(|| with_app(App::load_log));
+    a.on_connect_fastest(|| with_app(App::connect_fastest));
+    a.on_copy_link(|| {
+        with_app(|app| {
+            if let (Some(url), Some(p)) = (app.sub().map(|s| s.url.clone()).filter(|u| !u.is_empty()), service::platform()) {
+                p.copy_text(&url);
+                app.toast("Ссылка на подписку скопирована".into());
+            }
+        })
+    });
+    a.on_renew(|| {
+        with_app(|app| {
+            let now = store::now();
+            let url = servers::expiring(&app.store.subscriptions, now).and_then(|i| servers::renew_url(&app.store.subscriptions[i]));
+            if let (Some(url), Some(p)) = (url, service::platform()) {
+                p.open_url(&url);
+            }
+        })
+    });
+    a.on_dismiss_expiry(|| {
+        with_app(|app| {
+            if let Some(i) = servers::expiring(&app.store.subscriptions, store::now()) {
+                app.store.subscriptions[i].expiry_dismissed = app.store.subscriptions[i].info.expire;
+                app.save_store();
+                app.render_expiry();
+            }
+        })
+    });
+    a.on_buy(|| {
+        if let Some(p) = service::platform() {
+            p.open_url(servers::BUY_URL);
+        }
+    });
 }
 
 impl App {
@@ -389,8 +421,20 @@ impl App {
         st.set_announce_hidden(sub.announce_hidden);
         st.set_has_web_page(sub.info.web_page_url.is_some());
         st.set_has_support(sub.info.support_url.is_some());
-        st.set_sub_error(sub.last_error.clone().unwrap_or_default().into());
+        st.set_sub_error(sub.last_error.as_deref().map(servers::humanize).unwrap_or_default().into());
         st.set_busy(self.refreshing.contains(&sub.id));
+        self.render_expiry();
+    }
+
+    /// The reminder before (and a week after) a subscription ends.
+    fn render_expiry(&self) {
+        let Some(ui) = self.ui() else { return };
+        let st = ui.global::<AppState>();
+        let now = store::now();
+        let sub = servers::expiring(&self.store.subscriptions, now).map(|i| &self.store.subscriptions[i]);
+        let text = sub.and_then(|s| Some(servers::expiry_text(&s.display_name(), s.info.expire?, now)));
+        st.set_expiry_text(text.unwrap_or_default().into());
+        st.set_expiry_can_renew(sub.and_then(servers::renew_url).is_some());
     }
 
     fn render_servers(&mut self) {
@@ -717,6 +761,32 @@ impl App {
         }
     }
 
+    /// The fastest answering server of the shown subscription by the last
+    /// ping: selected and connected to (switched to, while connected).
+    fn connect_fastest(&mut self) {
+        let Some(sub) = self.sub() else { return };
+        let best = sub
+            .servers
+            .iter()
+            .filter_map(|s| {
+                let key = servers::key_of(sub, s);
+                let d = self.pings.get(&key)?.as_ref().ok()?;
+                Some((d.as_millis(), key, display_name(&s.name).1))
+            })
+            .min_by_key(|(ms, ..)| *ms);
+        let Some((ms, key, name)) = best else {
+            return self.toast("Ни один сервер подписки не ответил. Сначала проверьте задержку".into());
+        };
+        self.store.settings.last_server = Some(key.clone());
+        self.save_store();
+        self.render_servers();
+        self.toast(format!("Самый быстрый: «{name}», {ms} мс"));
+        match self.conn.status {
+            Status::On | Status::Connecting => service::switch_to(&key),
+            Status::Off | Status::Failed(_) => service::connect(Some(key)),
+        }
+    }
+
     fn toggle(&mut self) {
         match self.conn.status {
             Status::Off | Status::Failed(_) => service::connect(self.store.settings.last_server.clone()),
@@ -880,7 +950,7 @@ impl App {
                 self.show(&id);
                 self.refresh(id);
             }
-            Err(e) => self.toast(format!("Не удалось добавить: {e:#}")),
+            Err(e) => self.toast(servers::humanize(&format!("{e:#}"))),
         }
     }
 
@@ -889,7 +959,10 @@ impl App {
             Ok((id, added)) => {
                 self.save_store();
                 self.show(&id);
-                self.toast(format!("Добавлено: {}", servers::plural(added, "сервер", "сервера", "серверов")));
+                self.toast(match added {
+                    0 => "Эти серверы уже добавлены".into(),
+                    n => format!("Добавлено: {}", servers::plural(n, "сервер", "сервера", "серверов")),
+                });
             }
             Err(e) => self.toast(format!("Не удалось добавить: {e:#}")),
         }
