@@ -544,7 +544,7 @@ impl App {
             }
             None => st.set_conn_exit_text("".into()),
         }
-        st.set_conn_traffic(self.traffic.as_ref().filter(|_| connected).map(Traffic::label).unwrap_or_default().into());
+        st.set_conn_traffic(self.traffic.as_ref().filter(|_| connected).map(Traffic::speeds).unwrap_or_default().into());
         let ping = server.as_deref().and_then(|k| self.pings.get(k)).filter(|_| connected).map(ping::label);
         st.set_conn_ping_text(ping.as_ref().map(|p| p.0.clone()).unwrap_or_default().into());
         st.set_conn_ping_level(ping.map_or(0, |p| p.1));

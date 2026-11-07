@@ -50,6 +50,11 @@ impl Traffic {
         Traffic { at: now, counters: (up, down), session: (p.session.0 + du, p.session.1 + dd), rate: (du as f64 / secs, dd as f64 / secs) }
     }
 
+    /// "↓ 2.4 МБ/с  ↑ 120.0 КБ/с": just the speeds, for the narrow card.
+    pub fn speeds(&self) -> String {
+        format!("↓ {}/с   ↑ {}/с", bytes(self.rate.1 as u64), bytes(self.rate.0 as u64))
+    }
+
     /// "↓ 2.4 МБ/с · ↑ 120.0 КБ/с · 1.2 ГБ"
     pub fn label(&self) -> String {
         let rate = |b: f64| format!("{}/с", bytes(b as u64));

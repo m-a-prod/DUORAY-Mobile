@@ -902,7 +902,7 @@ component ConnectionCard inherits Rectangle {
     property <bool> has-exit: root.on && AppState.conn-exit-text != "";
     property <color> tone: root.on ? Theme.ok : root.state == "failed" ? Theme.danger : root.state == "idle" ? Theme.line : Theme.warn;
     border-radius: 20px;
-    background: Theme.card.with-alpha(0.93);
+    background: Theme.card.with-alpha(0.97);
     border-width: 1px;
     border-color: Theme.outline.with-alpha(0.9);
     drop-shadow-blur: 18px;
@@ -953,13 +953,13 @@ component ConnectionCard inherits Rectangle {
                 overflow: elide;
             }
             Text {
-                text: root.on ? AppState.conn-server : AppState.conn-detail;
+                text: root.on ? AppState.conn-server + (AppState.conn-ping-text != "" ? " · " + AppState.conn-ping-text : "") : AppState.conn-detail;
                 font-size: Theme.fs-caption;
                 color: root.state == "failed" ? Theme.danger : Theme.muted;
                 overflow: elide;
             }
-            if root.on && (AppState.conn-traffic != "" || AppState.conn-ping-text != ""): Text {
-                text: (AppState.conn-ping-text != "" ? AppState.conn-ping-text + " · " : "") + AppState.conn-traffic;
+            if root.on && AppState.conn-traffic != "": Text {
+                text: AppState.conn-traffic;
                 font-size: Theme.fs-caption;
                 color: Theme.muted;
                 overflow: elide;
@@ -969,6 +969,7 @@ component ConnectionCard inherits Rectangle {
             alignment: center;
             Button {
                 height: 40px;
+                preferred-width: self.min-width;
                 text: root.on ? "Отключить" : root.state == "connecting" ? "Отменить" : "Подключить";
                 primary: !root.on;
                 enabled: root.on || root.state == "connecting" || AppState.can-connect;
@@ -2193,6 +2194,15 @@ export component AppWindow inherits Window {
     in-out property <bool> sub-menu;
     property <length> top: root.safe-area-insets.top;
     property <length> bottom: root.safe-area-insets.bottom;
+    // Std-widget defaults (text without its own color, spinners) follow the
+    // chosen theme, not the phone's scheme: 0 system, 1 dark, 2 light.
+    property <int> scheme: Theme.follow-system ? 0 : Theme.c-light ? 2 : 1;
+    changed scheme => {
+        Palette.color-scheme = root.scheme == 0 ? ColorScheme.unknown : root.scheme == 2 ? ColorScheme.light : ColorScheme.dark;
+    }
+    init => {
+        Palette.color-scheme = root.scheme == 0 ? ColorScheme.unknown : root.scheme == 2 ? ColorScheme.light : ColorScheme.dark;
+    }
     // Android's back button closes what is open before leaving the app.
     forward-focus: back-keys;
     back-keys := FocusScope {
