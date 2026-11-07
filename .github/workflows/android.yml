@@ -1,0 +1,72 @@
+# Tests the Rust side and builds the Android APK on every push to main;
+# the APK is attached to the run as an artifact.
+#
+# DUORAY is checked out next to this repository: duoray-core comes from it
+# by path, like on a developer's machine.
+
+name: android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with: { path: DUORAY-Mobile }
+      - uses: actions/checkout@v7
+        with: { repository: m-a-prod/DUORAY, path: DUORAY }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype-dev libxkbcommon-dev libwayland-dev libx11-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: DUORAY-Mobile
+          key: test
+      - name: Unit tests
+        working-directory: DUORAY-Mobile
+        run: cargo test
+
+  apk:
+    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with: { path: DUORAY-Mobile }
+      - uses: actions/checkout@v7
+        with: { repository: m-a-prod/DUORAY, path: DUORAY }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-ndk }
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: DUORAY-Mobile
+          key: android
+      - name: SDK platform and build tools
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+      - name: Build APK
+        working-directory: DUORAY-Mobile
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          scripts/build-apk.sh release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: duoray-android
+          path: DUORAY-Mobile/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error

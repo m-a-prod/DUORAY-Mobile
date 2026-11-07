@@ -1,0 +1,2205 @@
+// DUORAY for phones, laid out after the desktop app (DUORAY's
+// crates/duoray-gui/ui/app.slint): the same theme palettes, header card,
+// server rows and connection card. The desktop sidebar is a drawer here.
+
+import { Palette, Spinner } from "std-widgets.slint";
+// Noto Sans, the face the desktop app shows on Linux (OFL, ui/fonts/OFL.txt).
+import "fonts/NotoSans-Regular.ttf";
+import "fonts/NotoSans-Medium.ttf";
+import "fonts/NotoSans-Bold.ttf";
+import "fonts/NotoSans-Black.ttf";
+
+export struct SubItem {
+    name: string,
+    meta: string,
+    active: bool,
+}
+
+export struct ServerRow {
+    flag: image,
+    has-flag: bool,
+    // ISO code or "··" when there is no flag image.
+    badge: string,
+    name: string,
+    description: string,
+    protocol: string,
+    transport: string,
+    proxies: int,
+    edited: bool,
+    ping-text: string,
+    // 0 none, 1 fast, 2 medium, 3 slow, 4 failed, 5 measuring.
+    ping-level: int,
+    selected: bool,
+    live: bool,
+}
+
+export struct SsidRow {
+    ssid: string,
+    server: string,
+}
+
+export struct AppRow {
+    icon: image,
+    has-icon: bool,
+    label: string,
+    package: string,
+    checked: bool,
+}
+
+export struct ThemeSwatch {
+    name: string,
+    bg: color,
+    card: color,
+    fg: color,
+    accent: color,
+    active: bool,
+}
+
+export global Theme {
+    in-out property <float> text-scale: 1.0;
+    // "Как в системе": Material colors following the phone's scheme.
+    in-out property <bool> follow-system: true;
+    out property <bool> system-light: Palette.color-scheme == ColorScheme.light;
+    in-out property <bool> c-light;
+    in-out property <color> c-bg: #000000;
+    in-out property <color> c-card: #0a0a0b;
+    in-out property <color> c-fg: #e6e6e6;
+    in-out property <color> c-line: #5a5a5e;
+    in-out property <color> c-accent: #d0bcff;
+    in-out property <color> c-on-accent: #381e72;
+    in-out property <color> c-tonal: #2a2a2e;
+    in-out property <color> c-on-tonal: #e6e6e6;
+    in-out property <color> c-track: #26262a;
+    in-out property <color> c-outline: #2c2c30;
+    property <bool> sys: follow-system;
+    out property <bool> light: sys ? system-light : c-light;
+    out property <color> bg: sys ? (system-light ? #f8f3f9 : #1c1b1f) : c-bg;
+    out property <color> card: sys ? (system-light ? #ece6f0 : #2a282d) : c-card;
+    out property <color> fg: sys ? (system-light ? #1d1b20 : #e6e1e5) : c-fg;
+    out property <color> line: sys ? (system-light ? #79747e : #938f99) : c-line;
+    out property <color> accent: sys ? (system-light ? #6750a4 : #d0bcff) : c-accent;
+    out property <color> on-accent: sys ? (system-light ? #ffffff : #381e72) : c-on-accent;
+    out property <color> tonal: sys ? (system-light ? #e8def8 : #4a4458) : c-tonal;
+    out property <color> on-tonal: sys ? (system-light ? #1e192b : #e8def8) : c-on-tonal;
+    out property <color> track: sys ? (system-light ? #e7e0ec : #36343b) : c-track;
+    out property <color> outline: sys ? transparent : c-outline;
+    out property <color> muted: fg.with-alpha(0.62);
+    out property <color> danger: light ? #ce2c31 : #e5484d;
+    out property <color> ok: light ? #218358 : #30a46c;
+    out property <color> warn: light ? #ab6400 : #f5a524;
+    out property <color> shadow: light ? #0000002e : #00000080;
+    out property <length> radius: 12px;
+    // The desktop's type scale, a notch up for a phone held at arm's length.
+    out property <length> fs-caption: 12px * text-scale;
+    out property <length> fs-small: 13px * text-scale;
+    out property <length> fs-body: 14px * text-scale;
+    out property <length> fs-title: 15px * text-scale;
+    out property <length> fs-heading: 19px * text-scale;
+    out property <length> fs-display: 23px * text-scale;
+}
+
+global Icons {
+    out property <image> refresh: @image-url("icons/refresh.svg");
+    out property <image> more: @image-url("icons/more.svg");
+    out property <image> info: @image-url("icons/info.svg");
+    out property <image> send: @image-url("icons/send.svg");
+    out property <image> expand-more: @image-url("icons/expand-more.svg");
+    out property <image> expand-less: @image-url("icons/expand-less.svg");
+    out property <image> sort: @image-url("icons/sort.svg");
+    out property <image> add: @image-url("icons/add.svg");
+    out property <image> delete: @image-url("icons/delete.svg");
+    out property <image> speed: @image-url("icons/speed.svg");
+    out property <image> menu: @image-url("icons/menu.svg");
+    out property <image> back: @image-url("icons/back.svg");
+    out property <image> close: @image-url("icons/close.svg");
+    out property <image> wifi: @image-url("icons/wifi.svg");
+    out property <image> cellular: @image-url("icons/cellular.svg");
+    out property <image> apps: @image-url("icons/apps.svg");
+    out property <image> chevron: @image-url("icons/chevron-right.svg");
+    out property <image> check: @image-url("icons/check.svg");
+    out property <image> logo-off: @image-url("assets/logo-off.svg");
+    out property <image> logo-on: @image-url("assets/logo-on.svg");
+    out property <image> logo-on-light: @image-url("assets/logo-on-light.svg");
+}
+
+// What the app shows; set from Rust (src/app.rs).
+export global AppState {
+    // Subscriptions with a URL; the hand-added group is shown apart.
+    in property <[SubItem]> subs;
+    in property <string> manual-meta;
+    in property <bool> has-manual;
+    in property <bool> manual-selected;
+    in property <bool> has-sub;
+    in property <string> header-title;
+    in property <string> header-meta;
+    // "обновлено 05:01 · 78 серверов", beside the actions.
+    in property <string> header-short;
+    in property <bool> show-usage-row;
+    in property <string> usage-text;
+    in property <float> usage-fraction: -1;
+    in property <string> announce;
+    in property <bool> announce-hidden;
+    in property <bool> has-web-page;
+    in property <bool> has-support;
+    in property <string> sub-error;
+    in property <bool> busy;
+    in property <[ServerRow]> servers;
+    in property <int> current-server: -1;
+    in property <bool> has-ping-results;
+    in property <bool> sort-by-ping;
+    in property <bool> pinging;
+    in property <bool> show-server-type;
+    // Connection: "idle" | "connecting" | "connected" | "failed".
+    in property <string> conn-state: "idle";
+    in property <string> conn-title: "Не подключено";
+    in property <string> conn-detail;
+    in property <image> conn-exit-flag;
+    in property <string> conn-exit-text;
+    in property <string> conn-server;
+    in property <string> conn-node;
+    in property <string> conn-traffic;
+    in property <string> conn-ping-text;
+    in property <int> conn-ping-level;
+    in property <bool> can-connect;
+    in property <string> status;
+    // Routing: the server per network.
+    in property <bool> policy-enabled;
+    in property <string> network-text;
+    in property <bool> on-wifi;
+    in property <string> current-ssid;
+    in property <string> wifi-server;
+    in property <string> mobile-server;
+    in property <[SsidRow]> ssid-rules;
+    // Routing: apps. app-mode 0 all, 1 all but the checked, 2 only the checked.
+    in property <int> app-mode;
+    in property <int> app-count;
+    in property <[AppRow]> apps;
+    in property <bool> apps-loading;
+    // Settings.
+    in property <[ThemeSwatch]> themes;
+    in property <int> text-scale: 100;
+    // 0 HTTP GET, 1 HTTP HEAD, 2 TCP, 3 ICMP.
+    in property <int> ping-mode;
+    in property <int> ping-threads: 8;
+    in property <int> ping-timeout: 5000;
+    in property <bool> switch-on-select: true;
+    in property <bool> autoconnect;
+    in property <bool> keep-connected: true;
+    in property <string> version;
+    in property <string> xray-log;
+    in property <string> toast;
+}
+
+// What the UI asks for; handled in Rust.
+export global Actions {
+    // -1 is the hand-added group.
+    callback select-sub(int);
+    callback select-server(int);
+    callback remove-server(int);
+    callback toggle-connection();
+    callback refresh();
+    callback ping-all();
+    callback ping-server(int);
+    callback toggle-sort();
+    callback toggle-announce();
+    callback open-web-page();
+    callback open-support();
+    callback add-subscription(string);
+    callback add-links(string);
+    callback remove-subscription();
+    callback set-policy-enabled(bool);
+    // target: 0 any Wi-Fi, 1 mobile data, 2 the Wi-Fi in use; row -1 clears.
+    callback pick-for(int, int);
+    callback remove-ssid(int);
+    callback ask-wifi-names();
+    callback load-apps();
+    callback set-app-mode(int);
+    callback toggle-app(string);
+    callback filter-apps(string);
+    callback set-theme(int);
+    callback set-text-scale(int);
+    callback set-ping-mode(int);
+    callback set-ping-threads(int);
+    callback set-ping-timeout(int);
+    callback set-switch-on-select(bool);
+    callback set-autoconnect(bool);
+    callback set-keep-connected(bool);
+    callback set-show-server-type(bool);
+    callback load-log();
+}
+
+// ── Controls (the desktop's, sized for fingers) ────────────────
+
+component Badge inherits Rectangle {
+    in property <string> text;
+    border-radius: 7px;
+    background: Theme.accent;
+    width: 38px;
+    height: 26px;
+    Text {
+        text: root.text;
+        color: Theme.on-accent;
+        font-size: Theme.fs-small;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> accent;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: root.accent ? Theme.accent : Theme.line;
+    background: root.accent ? Theme.accent.with-alpha(0.15) : transparent;
+    height: 19px;
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        Text {
+            text: root.text;
+            font-size: Theme.fs-caption - 1px;
+            color: root.accent ? Theme.fg : Theme.muted;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+component PingChip inherits Rectangle {
+    in property <string> text;
+    in property <int> level;
+    property <color> tone: root.level == 1 ? Theme.ok : root.level == 2 ? Theme.warn : root.level == 3 || root.level == 4 ? Theme.danger : Theme.muted;
+    border-radius: 6px;
+    height: 22px;
+    min-width: 56px;
+    horizontal-stretch: 0;
+    background: root.tone.with-alpha(0.14);
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        alignment: center;
+        if root.level == 5: VerticalLayout {
+            alignment: center;
+            Spinner {
+                indeterminate: true;
+                width: 14px;
+                height: 14px;
+            }
+        }
+        if root.level != 5: Text {
+            text: root.text;
+            font-size: Theme.fs-caption;
+            font-weight: 700;
+            color: root.tone;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component Button inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary;
+    in property <bool> danger;
+    callback clicked();
+    property <color> ink: root.primary ? Theme.on-accent : root.danger ? Theme.danger : Theme.on-tonal;
+    min-width: max(44px, label.preferred-width + 32px);
+    preferred-width: label.preferred-width + 40px;
+    height: 44px;
+    vertical-stretch: 0;
+    border-radius: self.height / 2;
+    background: !root.enabled ? Theme.fg.with-alpha(0.12) : root.primary ? Theme.accent : root.danger ? Theme.danger.with-alpha(0.16) : Theme.tonal;
+    transform-scale: touch.pressed ? 0.97 : 1;
+    animate background { duration: 150ms; easing: ease-out; }
+    animate transform-scale { duration: 100ms; easing: ease-out; }
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+    Rectangle {
+        border-radius: parent.border-radius;
+        background: root.ink.with-alpha(root.enabled && touch.pressed ? 0.14 : 0);
+    }
+    label := Text {
+        text: root.text;
+        color: root.enabled ? root.ink : Theme.fg.with-alpha(0.38);
+        font-size: Theme.fs-body;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <color> tint: Theme.fg;
+    in property <bool> enabled: true;
+    in property <bool> highlighted;
+    callback clicked();
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
+    background: root.highlighted ? Theme.accent.with-alpha(0.18) : touch.pressed && root.enabled ? Theme.fg.with-alpha(0.14) : transparent;
+    opacity: root.enabled ? 1 : 0.4;
+    animate background { duration: 120ms; easing: ease-out; }
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+    Image {
+        source: root.icon;
+        accessible-role: none;
+        width: 21px;
+        height: 21px;
+        colorize: root.highlighted ? Theme.accent : root.tint;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The arc turns while a refresh runs (computed points: the software
+// renderer ignores rotations).
+component RefreshButton inherits Rectangle {
+    in property <bool> spinning;
+    callback clicked();
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
+    background: touch.pressed && !root.spinning ? Theme.fg.with-alpha(0.14) : transparent;
+    if !root.spinning: Image {
+        source: Icons.refresh;
+        width: 21px;
+        height: 21px;
+        colorize: Theme.fg;
+    }
+    if root.spinning: Path {
+        property <angle> a: mod(animation-tick() / 1ms, 1000) * 0.36deg;
+        width: 21px;
+        height: 21px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: Theme.fg;
+        stroke-width: 2.2px;
+        stroke-line-cap: round;
+        MoveTo {
+            x: 12 + 8 * cos(a);
+            y: 12 + 8 * sin(a);
+        }
+        ArcTo {
+            x: 12 + 8 * cos(a + 270deg);
+            y: 12 + 8 * sin(a + 270deg);
+            radius-x: 8;
+            radius-y: 8;
+            large-arc: true;
+            sweep: true;
+        }
+    }
+    touch := TouchArea {
+        enabled: !root.spinning;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component Switch inherits Rectangle {
+    in-out property <bool> checked;
+    callback toggled();
+    property <length> knob: touch.pressed ? 28px : root.checked ? 24px : 16px;
+    width: 52px;
+    height: 32px;
+    border-radius: 16px;
+    border-width: 2px;
+    border-color: root.checked ? Theme.accent : Theme.line;
+    background: root.checked ? Theme.accent : Theme.track;
+    animate background, border-color { duration: 160ms; easing: ease-out; }
+    accessible-role: switch;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    Rectangle {
+        width: root.knob;
+        height: root.knob;
+        x: root.checked ? parent.width - root.knob - 4px : touch.pressed ? 2px : 8px;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: root.checked ? Theme.on-accent : Theme.line;
+        animate x, width, height, background { duration: 180ms; easing: ease-out; }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+}
+
+component Card inherits Rectangle {
+    background: Theme.card;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.outline;
+}
+
+component SectionLabel inherits Text {
+    font-size: Theme.fs-caption;
+    font-weight: 700;
+    color: Theme.muted;
+    letter-spacing: 0.6px;
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.line.with-alpha(0.35);
+}
+
+// A settings row: title and hint on the left, a switch on the right.
+component ToggleRow inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> hint;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    spacing: 12px;
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+        spacing: 2px;
+        Text {
+            text: root.title;
+            font-size: Theme.fs-body;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+        if root.hint != "": Text {
+            text: root.hint;
+            font-size: Theme.fs-caption;
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        Switch {
+            checked <=> root.checked;
+            toggled => {
+                root.toggled(self.checked);
+            }
+        }
+    }
+}
+
+// One choice of a segmented row.
+component Segment inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    height: 38px;
+    horizontal-stretch: 1;
+    border-radius: 9px;
+    background: root.active ? Theme.tonal : touch.pressed ? Theme.fg.with-alpha(0.06) : transparent;
+    animate background { duration: 150ms; }
+    Text {
+        text: root.text;
+        font-size: Theme.fs-small;
+        font-weight: root.active ? 700 : 500;
+        color: root.active ? Theme.on-tonal : Theme.fg;
+        overflow: elide;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// − value + stepper for small numbers (threads, timeout).
+component Stepper inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> value;
+    callback minus();
+    callback plus();
+    spacing: 4px;
+    Text {
+        text: root.title;
+        font-size: Theme.fs-body;
+        font-weight: 600;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+    }
+    Button {
+        text: "−";
+        width: 44px;
+        clicked => {
+            root.minus();
+        }
+    }
+    Text {
+        text: root.value;
+        font-size: Theme.fs-body;
+        min-width: 64px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Button {
+        text: "+";
+        width: 44px;
+        clicked => {
+            root.plus();
+        }
+    }
+}
+
+component PageHeader inherits HorizontalLayout {
+    in property <string> text;
+    callback back();
+    padding-left: 4px;
+    padding-right: 16px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    spacing: 4px;
+    IconButton {
+        icon: Icons.back;
+                        label: "Назад";
+        clicked => {
+            root.back();
+        }
+    }
+    Text {
+        text: root.text;
+        font-size: Theme.fs-heading;
+        font-weight: 800;
+        vertical-alignment: center;
+    }
+}
+
+// ── Servers ────────────────────────────────────────────────────
+
+component ServerItem inherits Rectangle {
+    in property <ServerRow> server;
+    in property <bool> show-selection: true;
+    in property <bool> manual;
+    callback clicked();
+    callback long-pressed();
+    callback remove();
+    property <bool> marked: root.show-selection && root.server.selected;
+    // A hold pings the server (as in Material Xray); the release after it is no tap.
+    property <bool> held;
+    height: 58px * Theme.text-scale;
+    border-radius: Theme.radius;
+    background: root.marked ? Theme.tonal : touch.pressed ? Theme.fg.with-alpha(0.06) : transparent;
+    animate background { duration: 120ms; easing: ease-out; }
+    touch := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                root.held = false;
+            }
+        }
+        clicked => {
+            if (!root.held) {
+                root.clicked();
+            }
+            root.held = false;
+        }
+    }
+    Timer {
+        interval: 450ms;
+        running: touch.pressed && !root.held;
+        triggered => {
+            root.held = true;
+            root.long-pressed();
+        }
+    }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            if root.server.has-flag: Image {
+                source: root.server.flag;
+                width: 30px;
+                height: 30px;
+                image-fit: contain;
+            }
+            if !root.server.has-flag: Badge {
+                text: root.server.badge;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.server.name;
+                font-size: Theme.fs-title;
+                font-weight: 600;
+                color: root.marked ? Theme.on-tonal : Theme.fg;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                if root.server.edited: Chip {
+                    text: "изменён";
+                    accent: true;
+                }
+                if root.server.proxies > 1: Chip {
+                    text: "авто × " + root.server.proxies;
+                }
+                if AppState.show-server-type: Chip {
+                    text: root.server.protocol;
+                }
+                Text {
+                    text: root.server.description;
+                    font-size: Theme.fs-caption;
+                    color: root.marked ? Theme.on-tonal.with-alpha(0.7) : Theme.muted;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+        // Last, in a column of its own: pings line up down the list.
+        if root.server.ping-level != 0: VerticalLayout {
+            alignment: center;
+            PingChip {
+                text: root.server.ping-text;
+                level: root.server.ping-level;
+                width: 62px * Theme.text-scale;
+            }
+        }
+        if root.manual: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.delete;
+                        label: "Удалить";
+                tint: Theme.danger;
+                clicked => {
+                    root.remove();
+                }
+            }
+        }
+    }
+}
+
+// Subscription card: the desktop header's content, compact for a phone.
+// The announcement starts folded.
+component HeaderCard inherits Card {
+    in-out property <bool> show-announce;
+    // The chips above already name the subscription.
+    in property <bool> show-title: true;
+    callback more-clicked();
+    VerticalLayout {
+        padding: 8px;
+        padding-left: 14px;
+        padding-right: 4px;
+        spacing: 4px;
+        HorizontalLayout {
+            if root.show-title: Text {
+                text: AppState.header-title;
+                font-size: Theme.fs-title + 2px;
+                font-weight: 800;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            if !root.show-title: Text {
+                text: AppState.header-short;
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            if !AppState.manual-selected: VerticalLayout {
+                alignment: center;
+                RefreshButton {
+                    spinning: AppState.busy;
+                    clicked => {
+                        Actions.refresh();
+                    }
+                }
+            }
+            if AppState.has-ping-results: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.sort;
+                        label: "Сортировать по задержке";
+                    highlighted: AppState.sort-by-ping;
+                    clicked => {
+                        Actions.toggle-sort();
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.speed;
+                    label: "Проверить задержку";
+                    enabled: !AppState.pinging;
+                    clicked => {
+                        Actions.ping-all();
+                    }
+                }
+            }
+            if AppState.announce != "": VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: root.show-announce ? Icons.expand-less : Icons.expand-more;
+                    clicked => {
+                        root.show-announce = !root.show-announce;
+                    }
+                }
+            }
+            if !AppState.manual-selected: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.more;
+                        label: "Действия с подпиской";
+                    clicked => {
+                        root.more-clicked();
+                    }
+                }
+            }
+        }
+        if root.show-title: HorizontalLayout {
+            padding-right: 10px;
+            Text {
+                text: AppState.header-short;
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                overflow: elide;
+            }
+        }
+        if AppState.show-usage-row: HorizontalLayout {
+            padding-right: 4px;
+            spacing: 4px;
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.info;
+                        label: "Страница подписки";
+                    tint: Theme.accent;
+                    enabled: AppState.has-web-page;
+                    clicked => {
+                        Actions.open-web-page();
+                    }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+                if AppState.usage-fraction > 0: Rectangle {
+                    x: 0;
+                    width: max(self.height, parent.width * min(1, AppState.usage-fraction));
+                    border-radius: self.height / 2;
+                    background: AppState.usage-fraction > 0.9 ? Theme.danger.with-alpha(0.7) : Theme.accent.with-alpha(0.55);
+                }
+                Rectangle {
+                    border-radius: self.height / 2;
+                    border-width: 1px;
+                    border-color: Theme.line;
+                }
+                Text {
+                    text: AppState.usage-text;
+                    font-size: Theme.fs-caption;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.send;
+                        label: "Поддержка";
+                    tint: #2aabee;
+                    enabled: AppState.has-support;
+                    clicked => {
+                        Actions.open-support();
+                    }
+                }
+            }
+        }
+        if AppState.sub-error != "": Text {
+            text: AppState.sub-error;
+            font-size: Theme.fs-caption;
+            color: Theme.danger;
+            wrap: word-wrap;
+            max-height: 34px;
+            overflow: elide;
+        }
+        if root.show-announce && AppState.announce != "": Text {
+            text: AppState.announce;
+            font-size: Theme.fs-caption;
+            color: Theme.muted;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// The desktop's connection card in one row: status (or the exit country
+// with its flag and the traffic) on the left, the button on the right.
+component ConnectionCard inherits Card {
+    property <string> state: AppState.conn-state;
+    property <bool> has-exit: root.state == "connected" && AppState.conn-exit-text != "";
+    property <color> tone: root.state == "connected" ? Theme.ok : root.state == "failed" ? Theme.danger : root.state == "idle" ? Theme.line : Theme.warn;
+    HorizontalLayout {
+        padding: 10px;
+        padding-left: 14px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            if root.has-exit: Image {
+                source: AppState.conn-exit-flag;
+                width: 30px;
+                height: 30px;
+                image-fit: contain;
+            }
+            if !root.has-exit: Rectangle {
+                width: 18px;
+                height: 18px;
+                // Soft halo: steady when connected, breathing while connecting.
+                Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    border-radius: self.height / 2;
+                    background: root.tone.with-alpha(0.25);
+                    opacity: root.state == "connecting" ? 0.5 + 0.5 * sin(mod(animation-tick() / 1ms, 1400) / 1400 * 360deg) : root.state == "connected" ? 1 : 0;
+                }
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: root.tone;
+                    animate background { duration: 200ms; easing: ease-out; }
+                }
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+            Text {
+                text: root.has-exit ? AppState.conn-exit-text : AppState.conn-title;
+                font-size: Theme.fs-title;
+                font-weight: 700;
+                color: root.state == "connected" && !root.has-exit ? Theme.ok : Theme.fg;
+                overflow: elide;
+            }
+            Text {
+                text: root.state == "connected" ? (AppState.conn-node != "" ? AppState.conn-server + " → " + AppState.conn-node : AppState.conn-server) : AppState.conn-detail;
+                font-size: Theme.fs-caption;
+                color: root.state == "failed" ? Theme.danger : Theme.muted;
+                wrap: word-wrap;
+                max-height: 32px;
+                overflow: elide;
+            }
+            if root.state == "connected": HorizontalLayout {
+                spacing: 6px;
+                if AppState.conn-ping-level != 0: PingChip {
+                    text: AppState.conn-ping-text;
+                    level: AppState.conn-ping-level;
+                }
+                Text {
+                    text: AppState.conn-traffic;
+                    font-size: Theme.fs-caption;
+                    color: Theme.muted;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Button {
+                min-width: 116px;
+                text: root.state == "connected" ? "Отключить" : root.state == "connecting" ? "Отменить" : "Подключить";
+                primary: root.state != "connected";
+                enabled: root.state == "connected" || root.state == "connecting" || AppState.can-connect;
+                clicked => {
+                    Actions.toggle-connection();
+                }
+            }
+        }
+    }
+}
+
+component EmptyServers inherits VerticalLayout {
+    callback add-clicked();
+    alignment: center;
+    padding: 32px;
+    spacing: 12px;
+    HorizontalLayout {
+        alignment: center;
+        Image {
+            source: Icons.logo-off;
+            width: 72px;
+            height: 60px;
+        }
+    }
+    Text {
+        text: "Добавьте подписку";
+        font-size: Theme.fs-heading;
+        font-weight: 800;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: "Ссылка на подписку или ключи vless://, vmess://, trojan://, ss://, hysteria2://";
+        font-size: Theme.fs-small;
+        color: Theme.muted;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: center;
+        Button {
+            text: "Добавить подписку";
+            primary: true;
+            clicked => {
+                root.add-clicked();
+            }
+        }
+    }
+}
+
+// ── Subscription chips ─────────────────────────────────────────
+
+component Chips inherits Flickable {
+    height: 44px;
+    content-width: max(self.width, chips.preferred-width);
+    chips := HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 8px;
+        alignment: start;
+        for sub[i] in AppState.subs: Rectangle {
+            height: 34px;
+            y: 5px;
+            width: chip-text.preferred-width + 26px;
+            border-radius: 17px;
+            background: sub.active ? Theme.tonal : transparent;
+            border-width: sub.active ? 0 : 1px;
+            border-color: Theme.line.with-alpha(0.6);
+            chip-text := Text {
+                text: sub.name;
+                font-size: Theme.fs-small;
+                font-weight: sub.active ? 700 : 500;
+                color: sub.active ? Theme.on-tonal : Theme.fg;
+            }
+            TouchArea {
+                clicked => {
+                    Actions.select-sub(i);
+                }
+            }
+        }
+        if AppState.has-manual: Rectangle {
+            height: 34px;
+            y: 5px;
+            width: manual-text.preferred-width + 26px;
+            border-radius: 17px;
+            background: AppState.manual-selected ? Theme.tonal : transparent;
+            border-width: AppState.manual-selected ? 0 : 1px;
+            border-color: Theme.line.with-alpha(0.6);
+            manual-text := Text {
+                text: "Мои серверы";
+                font-size: Theme.fs-small;
+                font-weight: AppState.manual-selected ? 700 : 500;
+                color: AppState.manual-selected ? Theme.on-tonal : Theme.fg;
+            }
+            TouchArea {
+                clicked => {
+                    Actions.select-sub(-1);
+                }
+            }
+        }
+    }
+}
+
+component PageTitle inherits HorizontalLayout {
+    in property <string> text;
+    padding-left: 18px;
+    padding-top: 10px;
+    padding-bottom: 6px;
+    Text {
+        text: root.text;
+        font-size: Theme.fs-heading;
+        font-weight: 800;
+    }
+}
+
+component NavItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    horizontal-stretch: 1;
+    VerticalLayout {
+        alignment: center;
+        spacing: 3px;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 60px;
+                height: 30px;
+                border-radius: 15px;
+                background: root.active ? Theme.tonal : transparent;
+                animate background { duration: 150ms; easing: ease-out; }
+                Image {
+                    source: root.icon;
+                    width: 21px;
+                    height: 21px;
+                    colorize: root.active ? Theme.on-tonal : Theme.muted;
+                }
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: Theme.fs-caption;
+            font-weight: root.active ? 700 : 500;
+            color: root.active ? Theme.fg : Theme.muted;
+            horizontal-alignment: center;
+        }
+    }
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// ── Routing ────────────────────────────────────────────────────
+
+component ChoiceRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> value;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 58px;
+    background: touch.pressed && root.enabled ? Theme.fg.with-alpha(0.06) : transparent;
+    opacity: root.enabled ? 1 : 0.45;
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 6px;
+        spacing: 14px;
+        Image {
+            source: root.icon;
+            width: 21px;
+            colorize: Theme.accent;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                font-size: Theme.fs-body;
+                font-weight: 600;
+            }
+            Text {
+                text: root.value;
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                overflow: elide;
+            }
+        }
+        Image {
+            source: Icons.chevron;
+            width: 21px;
+            colorize: Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component RoutingPage inherits Rectangle {
+    in property <length> bottom-inset;
+    callback pick(int);
+    callback open-apps();
+    background: Theme.bg;
+    VerticalLayout {
+        PageTitle {
+            text: "Маршрутизация";
+        }
+        Flickable {
+            vertical-stretch: 1;
+            content-width: self.width;
+            content-height: content.preferred-height;
+            content := VerticalLayout {
+                padding: 12px;
+                padding-top: 4px;
+                padding-bottom: root.bottom-inset + 12px;
+                spacing: 10px;
+                alignment: start;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    SectionLabel {
+                        text: "ПРИЛОЖЕНИЯ";
+                    }
+                }
+                Card {
+                    ChoiceRow {
+                        icon: Icons.apps;
+                        title: AppState.app-mode == 0 ? "Все приложения через VPN" : AppState.app-mode == 1 ? "Все, кроме выбранных" : "Только выбранные";
+                        value: AppState.app-mode == 0 ? "Можно исключить банки и другие приложения" : "Выбрано: " + AppState.app-count;
+                        clicked => {
+                            root.open-apps();
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
+                        text: "СЕРВЕР ПО СЕТИ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        ToggleRow {
+                            title: "Свой сервер для Wi-Fi и мобильной сети";
+                            hint: "При смене сети подключение само переходит на выбранный для неё сервер.";
+                            checked: AppState.policy-enabled;
+                            toggled(on) => {
+                                Actions.set-policy-enabled(on);
+                            }
+                        }
+                        Text {
+                            text: "Сейчас: " + AppState.network-text;
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                        }
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        ChoiceRow {
+                            icon: Icons.wifi;
+                            title: "Любая Wi-Fi сеть";
+                            value: AppState.wifi-server;
+                            enabled: AppState.policy-enabled;
+                            clicked => {
+                                root.pick(0);
+                            }
+                        }
+                        Divider { }
+                        ChoiceRow {
+                            icon: Icons.cellular;
+                            title: "Мобильная сеть";
+                            value: AppState.mobile-server;
+                            enabled: AppState.policy-enabled;
+                            clicked => {
+                                root.pick(1);
+                            }
+                        }
+                        for rule[i] in AppState.ssid-rules: VerticalLayout {
+                            Divider { }
+                            HorizontalLayout {
+                                height: 58px;
+                                padding-left: 14px;
+                                padding-right: 2px;
+                                spacing: 14px;
+                                Image {
+                                    source: Icons.wifi;
+                                    width: 21px;
+                                    colorize: Theme.accent;
+                                    vertical-alignment: center;
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text {
+                                        text: "«" + rule.ssid + "»";
+                                        font-size: Theme.fs-body;
+                                        font-weight: 600;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: rule.server;
+                                        font-size: Theme.fs-caption;
+                                        color: Theme.muted;
+                                        overflow: elide;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconButton {
+                                        icon: Icons.delete;
+                        label: "Удалить";
+                                        tint: Theme.muted;
+                                        clicked => {
+                                            Actions.remove-ssid(i);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Divider { }
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+                            if AppState.current-ssid != "": Button {
+                                text: "Сервер для «" + AppState.current-ssid + "»";
+                                enabled: AppState.policy-enabled;
+                                clicked => {
+                                    root.pick(2);
+                                }
+                            }
+                            if AppState.current-ssid == "" && AppState.on-wifi: Text {
+                                text: "Android показывает название Wi-Fi только приложениям с доступом к местоположению.";
+                                font-size: Theme.fs-caption;
+                                color: Theme.muted;
+                                wrap: word-wrap;
+                            }
+                            if AppState.current-ssid == "" && AppState.on-wifi: Button {
+                                text: "Разрешить";
+                                clicked => {
+                                    Actions.ask-wifi-names();
+                                }
+                            }
+                            if !AppState.on-wifi: Text {
+                                text: "Для отдельной Wi-Fi сети подключитесь к ней: здесь появится кнопка выбора сервера.";
+                                font-size: Theme.fs-caption;
+                                color: Theme.muted;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component AppsPage inherits Rectangle {
+    in property <length> bottom-inset;
+    callback back();
+    background: Theme.bg;
+    TouchArea { }
+    VerticalLayout {
+        PageHeader {
+            text: "Приложения";
+            back => {
+                root.back();
+            }
+        }
+        VerticalLayout {
+            vertical-stretch: 0;
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-bottom: 6px;
+            spacing: 8px;
+            Card {
+                HorizontalLayout {
+                    padding: 4px;
+                    spacing: 4px;
+                    Segment {
+                        text: "Все";
+                        active: AppState.app-mode == 0;
+                        clicked => {
+                            Actions.set-app-mode(0);
+                        }
+                    }
+                    Segment {
+                        text: "Кроме выбранных";
+                        active: AppState.app-mode == 1;
+                        clicked => {
+                            Actions.set-app-mode(1);
+                        }
+                    }
+                    Segment {
+                        text: "Только выбранные";
+                        active: AppState.app-mode == 2;
+                        clicked => {
+                            Actions.set-app-mode(2);
+                        }
+                    }
+                }
+            }
+            Text {
+                text: AppState.app-mode == 0 ? "Все приложения идут через VPN. Выберите режим, чтобы исключить или оставить отдельные." : AppState.app-mode == 1 ? "Отмеченные приложения идут напрямую, мимо VPN." : "Через VPN идут только отмеченные приложения.";
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                height: 42px;
+                border-radius: 21px;
+                background: Theme.card;
+                border-width: 1px;
+                border-color: search.has-focus ? Theme.accent : Theme.outline;
+                search := TextInput {
+                    x: 16px;
+                    width: parent.width - 32px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    font-size: Theme.fs-body;
+                    color: Theme.fg;
+                    single-line: true;
+                    edited => {
+                        Actions.filter-apps(self.text);
+                    }
+                }
+                if search.text == "": Text {
+                    x: 16px;
+                    text: "Поиск приложения";
+                    font-size: Theme.fs-body;
+                    color: Theme.muted;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        if AppState.apps-loading: VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                Spinner {
+                    indeterminate: true;
+                    width: 32px;
+                    height: 32px;
+                }
+            }
+        }
+        if !AppState.apps-loading: Flickable {
+            vertical-stretch: 1;
+            content-width: self.width;
+            content-height: app-list.preferred-height;
+            app-list := VerticalLayout {
+                alignment: start;
+                for app in AppState.apps: Rectangle {
+                    height: 60px;
+                    opacity: AppState.app-mode == 0 ? 0.5 : 1;
+                    background: app-touch.pressed ? Theme.fg.with-alpha(0.06) : transparent;
+                    app-touch := TouchArea {
+                        enabled: AppState.app-mode != 0;
+                        clicked => {
+                            Actions.toggle-app(app.package);
+                        }
+                    }
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 14px;
+                        VerticalLayout {
+                            alignment: center;
+                            if app.has-icon: Image {
+                                source: app.icon;
+                                width: 36px;
+                                height: 36px;
+                            }
+                            if !app.has-icon: Rectangle {
+                                width: 36px;
+                                height: 36px;
+                                border-radius: 10px;
+                                background: Theme.track;
+                            }
+                        }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 1px;
+                            Text {
+                                text: app.label;
+                                font-size: Theme.fs-body;
+                                font-weight: 600;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: app.package;
+                                font-size: Theme.fs-caption;
+                                color: Theme.muted;
+                                overflow: elide;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                border-radius: 6px;
+                                border-width: app.checked ? 0 : 2px;
+                                border-color: Theme.line;
+                                background: app.checked ? Theme.accent : transparent;
+                                if app.checked: Image {
+                                    source: Icons.check;
+                                    width: 18px;
+                                    height: 18px;
+                                    colorize: Theme.on-accent;
+                                }
+                            }
+                        }
+                    }
+                }
+        
+            }
+        }
+        Rectangle {
+            height: root.bottom-inset;
+        }
+    }
+}
+
+// ── Settings ───────────────────────────────────────────────────
+
+component ThemeTile inherits Rectangle {
+    in property <ThemeSwatch> swatch;
+    callback clicked();
+    height: 64px;
+    border-radius: 10px;
+    border-width: root.swatch.active ? 2px : 1px;
+    border-color: root.swatch.active ? Theme.accent : Theme.line.with-alpha(0.5);
+    background: root.swatch.bg;
+    clip: true;
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    Rectangle {
+        x: 8px;
+        y: 8px;
+        width: parent.width - 16px;
+        height: 22px;
+        border-radius: 6px;
+        background: root.swatch.card;
+        Rectangle {
+            x: parent.width - 18px;
+            width: 10px;
+            height: 10px;
+            border-radius: 5px;
+            background: root.swatch.accent;
+        }
+    }
+    Text {
+        x: 8px;
+        y: parent.height - self.height - 7px;
+        width: parent.width - 16px;
+        text: root.swatch.name;
+        font-size: Theme.fs-caption;
+        font-weight: 600;
+        color: root.swatch.fg;
+        overflow: elide;
+    }
+}
+
+component SettingsPage inherits Rectangle {
+    in property <length> bottom-inset;
+    background: Theme.bg;
+    VerticalLayout {
+        PageTitle {
+            text: "Настройки";
+        }
+        Flickable {
+            vertical-stretch: 1;
+            content-width: self.width;
+            content-height: content.preferred-height;
+            content := VerticalLayout {
+                padding: 12px;
+                padding-top: 4px;
+                padding-bottom: root.bottom-inset + 12px;
+                spacing: 10px;
+                alignment: start;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    SectionLabel {
+                        text: "ОФОРМЛЕНИЕ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 12px;
+                        // Two tiles a row.
+                        for row in (AppState.themes.length + 1) / 2: HorizontalLayout {
+                            spacing: 8px;
+                            ThemeTile {
+                                horizontal-stretch: 1;
+                                swatch: AppState.themes[row * 2];
+                                clicked => {
+                                    Actions.set-theme(row * 2);
+                                }
+                            }
+                            if row * 2 + 1 < AppState.themes.length: ThemeTile {
+                                horizontal-stretch: 1;
+                                swatch: AppState.themes[row * 2 + 1];
+                                clicked => {
+                                    Actions.set-theme(row * 2 + 1);
+                                }
+                            }
+                            if row * 2 + 1 >= AppState.themes.length: Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        Stepper {
+                            title: "Размер текста";
+                            value: AppState.text-scale + " %";
+                            minus => {
+                                Actions.set-text-scale(AppState.text-scale - 10);
+                            }
+                            plus => {
+                                Actions.set-text-scale(AppState.text-scale + 10);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Показывать тип сервера";
+                            checked: AppState.show-server-type;
+                            toggled(on) => {
+                                Actions.set-show-server-type(on);
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
+                        text: "ПИНГ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            Segment {
+                                text: "HTTP GET";
+                                active: AppState.ping-mode == 0;
+                                clicked => {
+                                    Actions.set-ping-mode(0);
+                                }
+                            }
+                            Segment {
+                                text: "HEAD";
+                                active: AppState.ping-mode == 1;
+                                clicked => {
+                                    Actions.set-ping-mode(1);
+                                }
+                            }
+                            Segment {
+                                text: "TCP";
+                                active: AppState.ping-mode == 2;
+                                clicked => {
+                                    Actions.set-ping-mode(2);
+                                }
+                            }
+                            Segment {
+                                text: "ICMP";
+                                active: AppState.ping-mode == 3;
+                                clicked => {
+                                    Actions.set-ping-mode(3);
+                                }
+                            }
+                        }
+                        Text {
+                            text: AppState.ping-mode <= 1 ? "Настоящая задержка: запрос через сам сервер. Сервер, который сеть не пропускает, покажет «—»." : "Только до сервера: заблокированный сервер может показать хорошее время.";
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        Stepper {
+                            title: "Потоков";
+                            value: AppState.ping-threads;
+                            minus => {
+                                Actions.set-ping-threads(AppState.ping-threads - 1);
+                            }
+                            plus => {
+                                Actions.set-ping-threads(AppState.ping-threads + 1);
+                            }
+                        }
+                        Stepper {
+                            title: "Таймаут";
+                            value: (AppState.ping-timeout / 1000) + " с";
+                            minus => {
+                                Actions.set-ping-timeout(AppState.ping-timeout - 1000);
+                            }
+                            plus => {
+                                Actions.set-ping-timeout(AppState.ping-timeout + 1000);
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
+                        text: "ПОДКЛЮЧЕНИЕ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+                        ToggleRow {
+                            title: "Подключаться при запуске";
+                            hint: "Сразу после запуска DUORAY подключается к последнему выбранному серверу.";
+                            checked: AppState.autoconnect;
+                            toggled(on) => {
+                                Actions.set-autoconnect(on);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Держать подключение";
+                            hint: "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на другой сервер той же подписки, самый быстрый по последнему пингу.";
+                            checked: AppState.keep-connected;
+                            toggled(on) => {
+                                Actions.set-keep-connected(on);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Переключаться при выборе сервера";
+                            hint: "Если VPN подключён, выбор другого сервера в списке сразу переключает подключение на него.";
+                            checked: AppState.switch-on-select;
+                            toggled(on) => {
+                                Actions.set-switch-on-select(on);
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
+                        text: "ЖУРНАЛ XRAY";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        Button {
+                            text: AppState.xray-log == "" ? "Показать" : "Обновить";
+                            clicked => {
+                                Actions.load-log();
+                            }
+                        }
+                        if AppState.xray-log != "": Text {
+                            text: AppState.xray-log;
+                            font-family: "monospace";
+                            font-size: 10px;
+                            color: Theme.muted;
+                            wrap: char-wrap;
+                        }
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 2px;
+                        Text {
+                            text: "DUORAY " + AppState.version;
+                            font-size: Theme.fs-body;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: "Клиент DUALIZM VPN на xray-core";
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Sheets ─────────────────────────────────────────────────────
+
+component InputSheet inherits Rectangle {
+    in property <length> top-inset;
+    in property <string> title;
+    in property <string> hint;
+    in property <string> placeholder;
+    callback close();
+    callback submit(string);
+    background: Theme.shadow;
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+    Rectangle {
+        x: 12px;
+        y: root.top-inset + 12px;
+        width: parent.width - 24px;
+        height: panel.preferred-height;
+        background: Theme.card;
+        border-radius: 18px;
+        border-width: 1px;
+        border-color: Theme.outline;
+        TouchArea { }
+        panel := VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+            Text {
+                text: root.title;
+                font-size: Theme.fs-heading;
+                font-weight: 800;
+            }
+            Text {
+                text: root.hint;
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                height: 110px;
+                border-radius: 12px;
+                background: Theme.bg;
+                border-width: input.has-focus ? 2px : 1px;
+                border-color: input.has-focus ? Theme.accent : Theme.line;
+                input := TextInput {
+                    x: 12px;
+                    y: 10px;
+                    width: parent.width - 24px;
+                    height: parent.height - 20px;
+                    single-line: false;
+                    wrap: char-wrap;
+                    font-size: Theme.fs-small;
+                    color: Theme.fg;
+                    selection-background-color: Theme.accent.with-alpha(0.3);
+                }
+                if input.text == "": Text {
+                    x: 12px;
+                    y: 10px;
+                    text: root.placeholder;
+                    font-size: Theme.fs-small;
+                    color: Theme.muted;
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Вставить";
+                    clicked => {
+                        input.focus();
+                        input.paste();
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: "Добавить";
+                    primary: true;
+                    enabled: input.text != "";
+                    clicked => {
+                        root.submit(input.text);
+                        root.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+component PickerSheet inherits Rectangle {
+    in property <int> target;
+    in property <length> top-inset;
+    in property <length> bottom-inset;
+    callback close();
+    background: Theme.bg;
+    TouchArea { }
+    VerticalLayout {
+        padding-top: root.top-inset;
+        padding-bottom: root.bottom-inset;
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 4px;
+            padding-top: 4px;
+            spacing: 8px;
+            Text {
+                text: root.target == 0 ? "Сервер для Wi-Fi" : root.target == 1 ? "Сервер для мобильной сети" : "Сервер для «" + AppState.current-ssid + "»";
+                font-size: Theme.fs-heading;
+                font-weight: 800;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            IconButton {
+                icon: Icons.close;
+                        label: "Закрыть";
+                clicked => {
+                    root.close();
+                }
+            }
+        }
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-bottom: 6px;
+            Text {
+                text: "Серверы подписки " + AppState.header-title + "; другую можно выбрать на вкладке «Серверы»";
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                overflow: elide;
+            }
+        }
+        if root.target != 2: Rectangle {
+            height: 50px;
+            background: clear-touch.pressed ? Theme.fg.with-alpha(0.06) : transparent;
+            clear-touch := TouchArea {
+                clicked => {
+                    Actions.pick-for(root.target, -1);
+                    root.close();
+                }
+            }
+            HorizontalLayout {
+                padding-left: 16px;
+                Text {
+                    text: "Не выбирать: сервер, выбранный вручную";
+                    font-size: Theme.fs-body;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        Flickable {
+            vertical-stretch: 1;
+            content-width: self.width;
+            content-height: pick-list.preferred-height;
+            pick-list := VerticalLayout {
+                alignment: start;
+                for row[i] in AppState.servers: HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    ServerItem {
+                        server: row;
+                        show-selection: false;
+                        clicked => {
+                            Actions.pick-for(root.target, i);
+                            root.close();
+                        }
+                    }
+                }
+        
+            }
+        }
+    }
+}
+
+component ConfirmSheet inherits Rectangle {
+    in property <string> title;
+    in property <string> action;
+    callback confirmed();
+    callback close();
+    background: Theme.shadow;
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+    Rectangle {
+        x: 24px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 48px;
+        height: box.preferred-height;
+        background: Theme.card;
+        border-radius: 18px;
+        border-width: 1px;
+        border-color: Theme.outline;
+        TouchArea { }
+        box := VerticalLayout {
+            padding: 18px;
+            spacing: 16px;
+            Text {
+                text: root.title;
+                font-size: Theme.fs-title;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                Button {
+                    text: "Отмена";
+                    clicked => {
+                        root.close();
+                    }
+                }
+                Button {
+                    text: root.action;
+                    danger: true;
+                    clicked => {
+                        root.confirmed();
+                        root.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Window ─────────────────────────────────────────────────────
+
+export component AppWindow inherits Window {
+    title: "DUORAY";
+    background: Theme.bg;
+    preferred-width: 412px;
+    preferred-height: 892px;
+    default-font-size: Theme.fs-body;
+    default-font-family: "Noto Sans";
+    // 0 servers, 1 routing, 2 settings; the apps list opens over routing.
+    in-out property <int> page;
+    in-out property <bool> apps-open;
+    in-out property <bool> adding;
+    // -1 hidden, else the pick-for target.
+    in-out property <int> picking: -1;
+    in-out property <bool> confirm-remove;
+    property <length> top: root.safe-area-insets.top;
+    property <length> bottom: root.safe-area-insets.bottom;
+    // Android's back button closes what is open before leaving the app.
+    forward-focus: back-keys;
+    back-keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if (event.text != Key.Back && event.text != Key.Escape) {
+                return reject;
+            }
+            if (root.adding) {
+                root.adding = false;
+            } else if (root.picking >= 0) {
+                root.picking = -1;
+            } else if (root.confirm-remove) {
+                root.confirm-remove = false;
+            } else if (root.apps-open) {
+                root.apps-open = false;
+            } else if (root.page != 0) {
+                root.page = 0;
+            } else {
+                return reject;
+            }
+            accept
+        }
+    }
+
+    VerticalLayout {
+        padding-top: root.top;
+        padding-left: root.safe-area-insets.left;
+        padding-right: root.safe-area-insets.right;
+        if root.page == 0: VerticalLayout {
+            vertical-stretch: 1;
+            HorizontalLayout {
+                height: 56px;
+                padding-left: 20px;
+                padding-right: 10px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: AppState.conn-state == "connected" ? (Theme.light ? Icons.logo-on-light : Icons.logo-on) : Icons.logo-off;
+                        width: 27px;
+                        height: 22px;
+                    }
+                }
+                Text {
+                    text: "DUORAY";
+                    font-size: 19px;
+                    font-weight: 800;
+                    letter-spacing: 1.5px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        icon: Icons.add;
+                        label: "Добавить подписку или ключи";
+                        clicked => {
+                            root.adding = true;
+                        }
+                    }
+                }
+            }
+            if !AppState.has-sub: EmptyServers {
+                vertical-stretch: 1;
+                add-clicked => {
+                    root.adding = true;
+                }
+            }
+            if AppState.has-sub: VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 6px;
+                if AppState.subs.length + (AppState.has-manual ? 1 : 0) > 1: Chips { }
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    HeaderCard {
+                        more-clicked => {
+                            root.confirm-remove = true;
+                        }
+                    }
+                }
+                Flickable {
+                    vertical-stretch: 1;
+                    content-width: self.width;
+                    content-height: server-list.preferred-height;
+                    server-list := VerticalLayout {
+                        alignment: start;
+                        for row[i] in AppState.servers: HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            ServerItem {
+                                server: row;
+                                manual: AppState.manual-selected;
+                                clicked => {
+                                    Actions.select-server(i);
+                                }
+                                long-pressed => {
+                                    Actions.ping-server(i);
+                                }
+                                remove => {
+                                    Actions.remove-server(i);
+                                }
+                            }
+                        }
+                
+                    }
+                }
+            }
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 6px;
+                padding-bottom: 8px;
+                ConnectionCard {
+                    border-radius: 18px;
+                }
+            }
+        }
+        if root.page == 1: RoutingPage {
+            vertical-stretch: 1;
+            pick(target) => {
+                root.picking = target;
+            }
+            open-apps => {
+                Actions.load-apps();
+                root.apps-open = true;
+            }
+        }
+        if root.page == 2: SettingsPage {
+            vertical-stretch: 1;
+        }
+        Rectangle {
+            height: 64px + max(root.bottom, 8px);
+            background: Theme.card;
+            border-width: 1px;
+            border-color: Theme.outline;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: max(root.bottom, 8px);
+                NavItem {
+                    icon: @image-url("icons/list.svg");
+                    text: "Серверы";
+                    active: root.page == 0;
+                    clicked => {
+                        root.page = 0;
+                    }
+                }
+                NavItem {
+                    icon: @image-url("icons/route.svg");
+                    text: "Маршрутизация";
+                    active: root.page == 1;
+                    clicked => {
+                        root.page = 1;
+                    }
+                }
+                NavItem {
+                    icon: @image-url("icons/settings.svg");
+                    text: "Настройки";
+                    active: root.page == 2;
+                    clicked => {
+                        root.page = 2;
+                    }
+                }
+            }
+        }
+    }
+
+    if root.apps-open: AppsPage {
+        y: root.top;
+        height: parent.height - root.top;
+        bottom-inset: root.bottom;
+        back => {
+            root.apps-open = false;
+        }
+    }
+    if AppState.toast != "": Rectangle {
+        x: 24px;
+        y: parent.height - root.bottom - self.height - 200px;
+        width: parent.width - 48px;
+        height: toast-text.preferred-height + 22px;
+        border-radius: 12px;
+        background: Theme.light ? #322f35 : #e6e0e9;
+        toast-text := Text {
+            x: 14px;
+            width: parent.width - 28px;
+            text: AppState.toast;
+            font-size: Theme.fs-small;
+            color: Theme.light ? #f5eff7 : #322f35;
+            wrap: word-wrap;
+        }
+    }
+    if root.adding: InputSheet {
+        top-inset: root.top;
+        title: "Добавить";
+        hint: "Ссылка на подписку или ключи vless://, vmess://, trojan://, ss://, hysteria2://";
+        placeholder: "https://… или vless://…";
+        close => {
+            root.adding = false;
+        }
+        submit(text) => {
+            Actions.add-subscription(text);
+        }
+    }
+    if root.picking >= 0: PickerSheet {
+        target: root.picking;
+        top-inset: root.top;
+        bottom-inset: root.bottom;
+        close => {
+            root.picking = -1;
+        }
+    }
+    if root.confirm-remove: ConfirmSheet {
+        title: "Удалить подписку «" + AppState.header-title + "»?";
+        action: "Удалить";
+        confirmed => {
+            Actions.remove-subscription();
+        }
+        close => {
+            root.confirm-remove = false;
+        }
+    }
+}
