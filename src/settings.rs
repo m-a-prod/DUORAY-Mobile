@@ -102,6 +102,9 @@ impl TunnelMode {
     }
 }
 
+/// SOCKS5 here, HTTP on the next port.
+pub const DEFAULT_PROXY_PORT: u16 = 10818;
+
 /// SOCKS5 on `port` and HTTP on `port + 1`: on 127.0.0.1 for the phone's
 /// apps, or on every interface so devices on the same Wi-Fi or on the
 /// phone's hotspot can go through its tunnel too.
@@ -119,8 +122,11 @@ pub struct ShareProxy {
 
 impl Default for ShareProxy {
     fn default() -> Self {
-        // The password is made when sharing is first turned on.
-        Self { enabled: false, auth: true, user: "duoray".into(), pass: String::new(), port: 10808 }
+        // The password is made when sharing is first turned on. Not 10808:
+        // v2rayNG, INCY and other xray clients take 10808 and 10809 by
+        // default, and two proxies on one port cannot both run. Files that
+        // have 10808 keep it (apps were set up with it).
+        Self { enabled: false, auth: true, user: "duoray".into(), pass: String::new(), port: DEFAULT_PROXY_PORT }
     }
 }
 

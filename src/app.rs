@@ -445,6 +445,15 @@ fn wire(ui: &AppWindow) {
     a.on_set_share(|on| with_app(|app| app.edit_share(|s| s.enabled = on)));
     a.on_set_share_auth(|on| with_app(|app| app.edit_share(|s| s.auth = on)));
     a.on_new_share_password(|| with_app(|app| app.edit_share(|s| s.pass = crate::settings::new_password())));
+    a.on_set_share_port(|text| {
+        with_app(|app| match text.trim().parse::<u16>() {
+            Ok(port) if (1024..=65534).contains(&port) => app.edit_share(|s| s.port = port),
+            _ => {
+                app.toast("Порт — число от 1024 до 65534".to_string());
+                app.render_settings();
+            }
+        })
+    });
     a.on_set_live_update(|on| {
         with_app(|app| {
             app.settings.live_update = on;
@@ -993,6 +1002,7 @@ impl App {
         st.set_share_auth(share.auth);
         st.set_share_user(share.user.as_str().into());
         st.set_share_pass(share.pass.as_str().into());
+        st.set_share_port(share.port.to_string().into());
         st.set_local_network(LOCAL_NETWORK.load(std::sync::atomic::Ordering::Relaxed));
         st.set_share_addresses(if self.settings.tunnel.proxy() { crate::share::describe(share).into() } else { "".into() });
         st.set_core_label(self.core_label().into());

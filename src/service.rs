@@ -596,6 +596,12 @@ fn on_xray_exit(attempt: u64, exit: tunnel::Exit) {
         // The line that says why, not xray's banner.
         let reason = exit.log_tail.lines().rev().find(|l| l.contains("Failed to start") || l.contains("[Error]"));
         match reason {
+            // The proxy's port, taken by another app (another xray client).
+            Some(line) if let Some(port) = busy_port(line) => {
+                message = format!(
+                    "Порт {port} занят другим приложением, скорее всего другим VPN-клиентом с прокси. Выключите его прокси или смените порт: Настройки → Режим работы → Порт."
+                );
+            }
             Some(line) => {
                 message.push_str(": ");
                 message.push_str(line.split_once("Failed to start: ").map_or(line, |(_, r)| r).trim());
@@ -611,6 +617,13 @@ fn on_xray_exit(attempt: u64, exit: tunnel::Exit) {
     if let Some(p) = platform {
         p.stop_vpn();
     }
+}
+
+/// The port of "listen tcp 127.0.0.1:10818: bind: address already in use".
+fn busy_port(line: &str) -> Option<u16> {
+    let at = line.find("address already in use")?;
+    let before = line[..at].trim_end_matches([' ', ':']).trim_end_matches("bind").trim_end_matches([' ', ':']);
+    before[before.rfind(':')? + 1..].parse().ok()
 }
 
 /// The platform opened the TUN. Returns false when there is nothing to run
@@ -882,6 +895,13 @@ pub fn mobile_config(mut config: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_busy_proxy_port_is_named() {
+        let line = "Failed to start: main: failed to start: app/proxyman/inbound: failed to listen TCP on 10818 > transport/internet: failed to listen on address: 127.0.0.1:10818 > listen tcp 127.0.0.1:10818: bind: address already in use";
+        assert_eq!(busy_port(line), Some(10818));
+        assert_eq!(busy_port("[Error] something else"), None);
+    }
 
     #[test]
     fn api_listens_on_a_socket_file_not_a_port() {

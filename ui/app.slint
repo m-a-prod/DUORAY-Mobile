@@ -272,6 +272,7 @@ export global AppState {
     in property <bool> share-auth: true;
     in property <string> share-user;
     in property <string> share-pass;
+    in property <string> share-port;
     in property <string> share-addresses;
     in property <bool> local-network: true;
     // The server picker's search: rows that do not match are hidden.
@@ -344,6 +345,7 @@ export global Actions {
     callback set-share(bool);
     callback set-share-auth(bool);
     callback new-share-password();
+    callback set-share-port(string);
     callback open-cores();
     callback install-core(string);
     callback select-core(string);
@@ -2345,6 +2347,53 @@ component SettingsPage inherits Rectangle {
                             font-family: "monospace";
                             font-size: Theme.fs-small;
                             color: Theme.fg;
+                            wrap: word-wrap;
+                        }
+                        if AppState.tunnel-mode != 0: HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "Порт";
+                                font-size: Theme.fs-body;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            Rectangle {
+                                width: 96px;
+                                height: 42px;
+                                border-radius: 10px;
+                                background: Theme.bg;
+                                border-width: port-input.has-focus ? 2px : 1px;
+                                border-color: port-input.has-focus ? Theme.accent : Theme.line;
+                                port-input := TextInput {
+                                    x: 12px;
+                                    width: parent.width - 24px;
+                                    height: parent.height;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    input-type: number;
+                                    text: AppState.share-port;
+                                    font-size: Theme.fs-small;
+                                    color: Theme.fg;
+                                    accepted => {
+                                        Actions.set-share-port(self.text);
+                                    }
+                                }
+                            }
+                            Button {
+                                text: "Применить";
+                                enabled: port-input.text != AppState.share-port;
+                                clicked => {
+                                    Actions.set-share-port(port-input.text);
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        if AppState.tunnel-mode != 0: Text {
+                            text: "SOCKS5 — на этом порту, HTTP — на следующем. Пока прокси работает, порты заняты: другой клиент с прокси на тех же портах (v2rayNG, INCY берут 10808 и 10809) не запустится. Выключается прокси кнопкой «Отключить».";
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
                             wrap: word-wrap;
                         }
                         if AppState.tunnel-mode != 0 && AppState.share-enabled && !AppState.local-network: Text {
