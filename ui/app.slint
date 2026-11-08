@@ -250,6 +250,8 @@ export global AppState {
     in property <bool> quiet-notification;
     in property <bool> kill-switch;
     in property <bool> connect-off-wifi;
+    // The caption bar of a floating window, from the platform.
+    in property <length> caption-top;
     in property <bool> live-ping: true;
     in property <bool> disconnect-on-wifi;
     // Servers in «Резерв» that still exist.
@@ -1302,6 +1304,8 @@ component NavItem inherits Rectangle {
             font-weight: root.active ? 700 : 500;
             color: root.active ? Theme.fg : Theme.muted;
             horizontal-alignment: center;
+            // A narrow floating window: the labels shorten, not overlap.
+            overflow: elide;
         }
     }
     TouchArea {
@@ -2267,7 +2271,7 @@ component SettingsPage inherits Rectangle {
                             }
                         }
                         Text {
-                            text: AppState.tunnel-mode == 0 ? "Весь трафик телефона идёт через VPN." : AppState.tunnel-mode == 1 ? "VPN, и рядом SOCKS5/HTTP-прокси: для приложений, которым его указывают, и для других устройств через хотспот." : "Без VPN: только SOCKS5/HTTP-прокси, через него идут приложения, где он указан. Работает вместе с другим VPN, например Tailscale.";
+                            text: AppState.tunnel-mode == 0 ? "Весь трафик телефона идёт через VPN." : AppState.tunnel-mode == 1 ? "VPN, и рядом SOCKS5/HTTP-прокси: для приложений, которым его указывают, и для других устройств через хотспот." : "Без VPN: только SOCKS5/HTTP-прокси. Через него идут только приложения, где он указан (или все, если указать HTTP-прокси в настройках Wi-Fi). Работает вместе с другим VPN, например Tailscale.";
                             font-size: Theme.fs-caption;
                             color: Theme.muted;
                             wrap: word-wrap;
@@ -2307,7 +2311,7 @@ component SettingsPage inherits Rectangle {
                         }
                         if AppState.tunnel-mode != 0: ToggleRow {
                             title: "Логин и пароль";
-                            hint: "Без них прокси может использовать любое приложение на телефоне, в том числе чтобы проверить, включён ли VPN, а с хотспотом — любое устройство в сети.";
+                            hint: "Без них прокси может использовать любое приложение на телефоне, в том числе чтобы проверить, включён ли VPN, а с хотспотом — любое устройство в сети. Прокси в настройках Wi-Fi Android логин и пароль не передаёт: для него выключите.";
                             checked: AppState.share-auth;
                             toggled(on) => {
                                 Actions.set-share-auth(on);
@@ -3645,7 +3649,9 @@ export component AppWindow inherits Window {
     open-qr => {
         root.qr-open = true;
     }
-    property <length> top: root.safe-area-insets.top;
+    // A floating window's caption (Android's freeform, the makers' own
+    // floating windows) covers the top: Slint's safe area leaves it out.
+    property <length> top: max(root.safe-area-insets.top, AppState.caption-top);
     property <length> bottom: root.safe-area-insets.bottom;
     // Std-widget defaults (text without its own color, spinners) follow the
     // chosen theme, not the phone's scheme: 0 system, 1 dark, 2 light.

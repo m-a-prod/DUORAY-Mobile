@@ -112,6 +112,9 @@ object Native {
     /** Whether DUORAY may talk to the local network (Android 17 asks the user). */
     @JvmStatic external fun localNetwork(granted: Boolean)
 
+    /** The caption bar of a floating window over the top of the window, in pixels. */
+    @JvmStatic external fun captionTop(px: Int)
+
     /** The system Back, while the window takes it. */
     @JvmStatic external fun back()
 

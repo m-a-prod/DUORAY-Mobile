@@ -378,6 +378,16 @@ pub extern "system" fn Java_space_dualizm_duoray_Native_batteryUnrestricted<'a>(
     .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `Native.captionTop(px)`: a floating window's caption bar over the top.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_captionTop<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, px: jint) {
+    env.with_env(|_env| -> jni::errors::Result<()> {
+        crate::app::set_caption_top(px);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `Native.localNetwork(granted)`: Android 17's permission for the LAN,
 /// which the hotspot proxy needs.
 #[unsafe(no_mangle)]

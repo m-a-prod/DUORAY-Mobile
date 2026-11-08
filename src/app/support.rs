@@ -107,6 +107,7 @@ impl App {
                 "live_ping": self.settings.live_ping,
                 "kill_switch": self.settings.kill_switch,
                 "share": self.settings.share.enabled,
+                "tunnel": format!("{:?}", self.settings.tunnel),
                 "core": self.settings.core.is_some(),
                 "autoconnect": s.autoconnect,
                 "happ": s.happ.enabled,

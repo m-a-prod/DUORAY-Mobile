@@ -38,6 +38,7 @@ class MainActivity : NativeActivity() {
         NetworkWatcher.start(applicationContext)
         super.onCreate(savedInstanceState)
         preferHighRefreshRate()
+        watchCaption()
         handleLink(intent)
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -93,6 +94,26 @@ class MainActivity : NativeActivity() {
         window.attributes = window.attributes.apply {
             preferredDisplayModeId = best.modeId
             preferredRefreshRate = best.refreshRate
+        }
+    }
+
+    /** The caption bar last reported to Rust, in pixels. */
+    private var captionTop = -1
+
+    /**
+     * A floating window's caption bar (freeform, the makers' floating
+     * windows) lies over the window's top. Android reports it with the
+     * window's insets; Slint's safe area leaves it out, so Rust adds it.
+     */
+    private fun watchCaption() {
+        if (Build.VERSION.SDK_INT < 30) return
+        val decor = window.decorView
+        decor.viewTreeObserver.addOnGlobalLayoutListener {
+            val px = decor.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.captionBar())?.top ?: 0
+            if (px != captionTop) {
+                captionTop = px
+                Native.captionTop(px)
+            }
         }
     }
 

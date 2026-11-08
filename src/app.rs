@@ -91,6 +91,15 @@ static BATTERY_UNRESTRICTED: std::sync::atomic::AtomicBool = std::sync::atomic::
 /// Android 17's local network permission, for the hotspot proxy.
 static LOCAL_NETWORK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+/// The caption bar a floating window puts over the top, in pixels.
+static CAPTION_TOP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_caption_top(px: i32) {
+    CAPTION_TOP.store(px.max(0), std::sync::atomic::Ordering::Relaxed);
+    let _ = slint::invoke_from_event_loop(|| with_app(App::apply_caption));
+}
+
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub fn set_local_network(granted: bool) {
     LOCAL_NETWORK.store(granted, std::sync::atomic::Ordering::Relaxed);
@@ -190,6 +199,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
     wire(&ui);
     ui.global::<AppState>().set_version(env!("CARGO_PKG_VERSION").into());
     with_app(|app| {
+        app.apply_caption();
         app.apply_appearance();
         app.render_all();
         app.refresh_stale();
@@ -697,6 +707,12 @@ impl App {
     }
 
     // ── Rendering ──────────────────────────────────────────────
+
+    fn apply_caption(&mut self) {
+        let Some(ui) = self.ui() else { return };
+        let px = CAPTION_TOP.load(std::sync::atomic::Ordering::Relaxed) as f32;
+        ui.global::<AppState>().set_caption_top(px / ui.window().scale_factor());
+    }
 
     fn apply_appearance(&self) {
         let Some(ui) = self.ui() else { return };
