@@ -2,7 +2,8 @@
 //! phone: subscriptions and pings are real, the VPN only pretends.
 //!
 //! `DUORAY_PREVIEW_DATA` picks the data directory, `DUORAY_PAGE` the page to
-//! open (0..2, or 3 for the first server's editor), and `DUORAY_SHOT=file.png` saves a screenshot and quits.
+//! open (0..2, or 3 for the first server's editor), `DUORAY_SIZE=WxH` the
+//! window size in dp, and `DUORAY_SHOT=file.png` saves a screenshot and quits.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -71,7 +72,12 @@ pub fn main() -> Result<()> {
     let page = std::env::var("DUORAY_PAGE").ok().and_then(|p| p.parse().ok()).unwrap_or(0);
     let shot = std::env::var_os("DUORAY_SHOT").map(PathBuf::from);
     crate::app::run(|ui| {
-        ui.window().set_size(slint::LogicalSize::new(412.0, 892.0));
+        // DUORAY_SIZE=690x830: another screen (a foldable unfolded, a tablet).
+        let (w, h) = std::env::var("DUORAY_SIZE")
+            .ok()
+            .and_then(|s| s.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
+            .unwrap_or((412.0, 892.0));
+        ui.window().set_size(slint::LogicalSize::new(w, h));
         if page == 3 {
             let weak = ui.as_weak();
             slint::Timer::single_shot(Duration::from_millis(300), move || {
