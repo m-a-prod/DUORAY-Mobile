@@ -250,6 +250,7 @@ export global AppState {
     in property <bool> quiet-notification;
     in property <bool> kill-switch;
     in property <bool> connect-off-wifi;
+    in property <bool> disconnect-on-wifi: true;
     // Servers in «Резерв» that still exist.
     in property <int> reserve-count;
     in property <int> failover-secs: 15;
@@ -319,6 +320,7 @@ export global Actions {
     callback set-quiet-notification(bool);
     callback set-kill-switch(bool);
     callback set-connect-off-wifi(bool);
+    callback set-disconnect-on-wifi(bool);
     callback set-server-pinned(bool);
     callback set-server-reserve(bool);
     callback request-background();
@@ -2170,6 +2172,14 @@ component SettingsPage inherits Rectangle {
                             checked: AppState.connect-off-wifi;
                             toggled(on) => {
                                 Actions.set-connect-off-wifi(on);
+                            }
+                        }
+                        if AppState.connect-off-wifi: ToggleRow {
+                            title: "Отключать на Wi-Fi";
+                            hint: "Вернулись на Wi-Fi: VPN, включённый в мобильной сети, отключается. Включённый вручную на Wi-Fi остаётся.";
+                            checked: AppState.disconnect-on-wifi;
+                            toggled(on) => {
+                                Actions.set-disconnect-on-wifi(on);
                             }
                         }
                         ToggleRow {

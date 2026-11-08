@@ -346,7 +346,15 @@ fn wire(ui: &AppWindow) {
     a.on_set_connect_off_wifi(|on| {
         with_app(|app| {
             app.settings.connect_off_wifi = on;
-            service::set_connect_off_wifi(on);
+            service::set_connect_off_wifi(on, app.settings.disconnect_on_wifi);
+            app.save_settings();
+            app.render_settings();
+        })
+    });
+    a.on_set_disconnect_on_wifi(|on| {
+        with_app(|app| {
+            app.settings.disconnect_on_wifi = on;
+            service::set_connect_off_wifi(app.settings.connect_off_wifi, on);
             app.save_settings();
             app.render_settings();
         })
@@ -931,6 +939,7 @@ impl App {
         st.set_quiet_notification(self.settings.quiet_notification);
         st.set_kill_switch(self.settings.kill_switch);
         st.set_connect_off_wifi(self.settings.connect_off_wifi);
+        st.set_disconnect_on_wifi(self.settings.disconnect_on_wifi);
         st.set_reserve_count(self.reserve_keys().len() as i32);
         st.set_failover_secs(self.settings.failover_secs as i32);
         st.set_battery_unrestricted(BATTERY_UNRESTRICTED.load(std::sync::atomic::Ordering::Relaxed));

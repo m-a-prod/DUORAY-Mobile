@@ -43,6 +43,9 @@ pub struct MobileSettings {
     pub reserve: Vec<String>,
     /// «Подключаться без Wi-Fi»: leaving Wi-Fi for mobile data connects.
     pub connect_off_wifi: bool,
+    /// «Отключать на Wi-Fi» (with connect_off_wifi): back on Wi-Fi, a
+    /// connection made on mobile data ends.
+    pub disconnect_on_wifi: bool,
     /// «Режим работы»: VPN, VPN with a proxy next to it, or the proxy alone.
     pub tunnel: TunnelMode,
     /// The proxy of «VPN + прокси» and «Прокси»; «Доступ через хотспот»
@@ -131,6 +134,7 @@ impl Default for MobileSettings {
             failover_secs: 15,
             reserve: Vec::new(),
             connect_off_wifi: false,
+            disconnect_on_wifi: true,
             keep_connected: false,
             kill_switch: false,
             tunnel: TunnelMode::Vpn,

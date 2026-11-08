@@ -180,6 +180,10 @@ struct Service {
     retried: u64,
     /// The last network that was not "offline": what a rule switch compares with.
     online: NetworkEnv,
+    /// The network the connection was turned on in (by hand or by «Подключаться
+    /// без Wi-Fi»); switches between servers keep it. One made on mobile
+    /// data ends back on Wi-Fi with «Отключать на Wi-Fi».
+    connected_on: Option<NetKind>,
     /// Bumped by every connect and disconnect: late results of an older
     /// attempt are dropped.
     attempt: u64,
@@ -263,11 +267,13 @@ impl Service {
 /// MobileSettings::kill_switch.
 static KILL_SWITCH: AtomicBool = AtomicBool::new(false);
 
-/// MobileSettings::connect_off_wifi.
+/// MobileSettings::connect_off_wifi and ::disconnect_on_wifi.
 static CONNECT_OFF_WIFI: AtomicBool = AtomicBool::new(false);
+static DISCONNECT_ON_WIFI: AtomicBool = AtomicBool::new(true);
 
-pub fn set_connect_off_wifi(on: bool) {
+pub fn set_connect_off_wifi(on: bool, disconnect_on_wifi: bool) {
     CONNECT_OFF_WIFI.store(on, Ordering::Relaxed);
+    DISCONNECT_ON_WIFI.store(disconnect_on_wifi, Ordering::Relaxed);
 }
 
 pub fn set_kill_switch(on: bool) {
@@ -290,7 +296,7 @@ pub fn init(host: Host) {
         crate::status::set_live_update(settings.live_update);
         crate::status::set_quiet(settings.quiet_notification);
         set_kill_switch(settings.kill_switch);
-        set_connect_off_wifi(settings.connect_off_wifi);
+        set_connect_off_wifi(settings.connect_off_wifi, settings.disconnect_on_wifi);
         tunnel::select_core(settings.core.as_deref().map(|tag| crate::core::executable(&host.data, tag)));
         s.policy = settings.policy;
         s.apps = settings.apps;
@@ -369,7 +375,8 @@ pub fn rebuild_tun() {
 /// Connects to the server the current network asks for, else to `chosen`.
 pub fn connect(chosen: Option<String>) {
     let key = {
-        let s = lock();
+        let mut s = lock();
+        s.connected_on = Some(s.online.kind);
         s.target().map(String::from).or(chosen)
     };
     match key {
@@ -464,6 +471,7 @@ pub fn set_tunnel_mode(vpn_changed: bool) {
 pub fn disconnect() {
     let platform = {
         let mut s = lock();
+        s.connected_on = None;
         s.attempt += 1;
         s.status = Status::Off;
         if let Some(x) = s.xray.take() {
@@ -690,7 +698,11 @@ pub fn on_vpn_denied() {
 }
 
 pub fn on_network(net: NetworkEnv) {
-    let switch = {
+    enum Next {
+        Start(String, &'static str),
+        Stop,
+    }
+    let next = {
         let mut s = lock();
         if s.net == net {
             return;
@@ -714,18 +726,31 @@ pub fn on_network(net: NetworkEnv) {
         // Off Wi-Fi onto mobile data with nothing connected: «Подключаться
         // без Wi-Fi» connects (to the network's server, else the last one).
         let left_wifi = s.online.kind == NetKind::Wifi && net.kind == NetKind::Mobile;
+        // Back on Wi-Fi: a connection made on mobile data ends («Отключать на
+        // Wi-Fi»); one turned on by hand on Wi-Fi stays.
+        let back_on_wifi = s.online.kind == NetKind::Mobile && net.kind == NetKind::Wifi;
+        let auto = CONNECT_OFF_WIFI.load(Ordering::Relaxed);
         s.online = net;
         // A new network: its rule counts again.
         s.manual = None;
-        if left_wifi && CONNECT_OFF_WIFI.load(Ordering::Relaxed) && s.status == Status::Off {
+        let on = s.active() || (matches!(s.status, Status::Failed(_)) && s.tun.is_some());
+        if left_wifi && auto && s.status == Status::Off {
+            s.connected_on = Some(NetKind::Mobile);
             let last = s.host.as_ref().and_then(|h| Store::load(&h.store()).ok()).and_then(|st| st.settings.last_server);
-            s.target().map(String::from).or(last).map(|key| (key, "left Wi-Fi"))
+            s.target().map(String::from).or(last).map(|key| Next::Start(key, "left Wi-Fi"))
+        } else if back_on_wifi && auto && DISCONNECT_ON_WIFI.load(Ordering::Relaxed) && on && s.connected_on == Some(NetKind::Mobile) {
+            Some(Next::Stop)
         } else {
-            s.wanted_switch().map(|key| (key, "network rule"))
+            s.wanted_switch().map(|key| Next::Start(key, "network rule"))
         }
     };
-    if let Some((key, why)) = switch {
-        start(key, why);
+    match next {
+        Some(Next::Start(key, why)) => start(key, why),
+        Some(Next::Stop) => {
+            crate::diag::log("disconnect: back on Wi-Fi");
+            disconnect();
+        }
+        None => {}
     }
 }
 
