@@ -97,22 +97,29 @@ class MainActivity : NativeActivity() {
         }
     }
 
-    /** The caption bar last reported to Rust, in pixels. */
+    /** The insets last reported to Rust, in pixels. */
     private var captionTop = -1
+    private var barsBottom = -1
 
     /**
      * A floating window's caption bar (freeform, the makers' floating
-     * windows) lies over the window's top. Android reports it with the
-     * window's insets; Slint's safe area leaves it out, so Rust adds it.
+     * windows) lies over the window's top, and the taskbar or the
+     * navigation bar can lie over its bottom. Android reports both with the
+     * window's insets; Slint's safe area leaves them out for such a window,
+     * so Rust adds them.
      */
     private fun watchCaption() {
         if (Build.VERSION.SDK_INT < 30) return
         val decor = window.decorView
         decor.viewTreeObserver.addOnGlobalLayoutListener {
-            val px = decor.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.captionBar())?.top ?: 0
-            if (px != captionTop) {
-                captionTop = px
-                Native.captionTop(px)
+            val insets = decor.rootWindowInsets
+            val top = insets?.getInsets(android.view.WindowInsets.Type.captionBar())?.top ?: 0
+            val bars = android.view.WindowInsets.Type.navigationBars() or android.view.WindowInsets.Type.tappableElement()
+            val bottom = insets?.getInsets(bars)?.bottom ?: 0
+            if (top != captionTop || bottom != barsBottom) {
+                captionTop = top
+                barsBottom = bottom
+                Native.windowInsets(top, bottom)
             }
         }
     }

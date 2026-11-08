@@ -378,11 +378,12 @@ pub extern "system" fn Java_space_dualizm_duoray_Native_batteryUnrestricted<'a>(
     .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `Native.captionTop(px)`: a floating window's caption bar over the top.
+/// `Native.windowInsets(top, bottom)`: a floating window's caption bar over
+/// its top, the taskbar or navigation bar over its bottom.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_space_dualizm_duoray_Native_captionTop<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, px: jint) {
+pub extern "system" fn Java_space_dualizm_duoray_Native_windowInsets<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, top: jint, bottom: jint) {
     env.with_env(|_env| -> jni::errors::Result<()> {
-        crate::app::set_caption_top(px);
+        crate::app::set_window_insets(top, bottom);
         Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>()

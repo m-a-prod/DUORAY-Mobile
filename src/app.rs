@@ -102,12 +102,16 @@ static BATTERY_UNRESTRICTED: std::sync::atomic::AtomicBool = std::sync::atomic::
 /// Android 17's local network permission, for the hotspot proxy.
 static LOCAL_NETWORK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-/// The caption bar a floating window puts over the top, in pixels.
+/// The caption bar a floating window puts over its top and the bars over
+/// its bottom, in pixels.
 static CAPTION_TOP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+static BARS_BOTTOM: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
-pub fn set_caption_top(px: i32) {
-    CAPTION_TOP.store(px.max(0), std::sync::atomic::Ordering::Relaxed);
+pub fn set_window_insets(top: i32, bottom: i32) {
+    log::info!("window insets: caption {top}px, bars {bottom}px");
+    CAPTION_TOP.store(top.max(0), std::sync::atomic::Ordering::Relaxed);
+    BARS_BOTTOM.store(bottom.max(0), std::sync::atomic::Ordering::Relaxed);
     let _ = slint::invoke_from_event_loop(|| with_app(App::apply_caption));
 }
 
@@ -734,8 +738,10 @@ impl App {
 
     fn apply_caption(&mut self) {
         let Some(ui) = self.ui() else { return };
-        let px = CAPTION_TOP.load(std::sync::atomic::Ordering::Relaxed) as f32;
-        ui.global::<AppState>().set_caption_top(px / ui.window().scale_factor());
+        let scale = ui.window().scale_factor();
+        let px = |v: &std::sync::atomic::AtomicI32| v.load(std::sync::atomic::Ordering::Relaxed) as f32 / scale;
+        ui.global::<AppState>().set_caption_top(px(&CAPTION_TOP));
+        ui.global::<AppState>().set_bars_bottom(px(&BARS_BOTTOM));
     }
 
     fn apply_appearance(&self) {

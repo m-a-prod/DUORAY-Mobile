@@ -258,8 +258,10 @@ export global AppState {
     in property <bool> quiet-notification;
     in property <bool> kill-switch;
     in property <bool> connect-off-wifi;
-    // The caption bar of a floating window, from the platform.
+    // The caption bar of a floating window and the bars over its bottom,
+    // from the platform.
     in property <length> caption-top;
+    in property <length> bars-bottom;
     in property <bool> live-ping: true;
     in property <bool> disconnect-on-wifi;
     // Servers in «Резерв» that still exist.
@@ -1335,7 +1337,8 @@ component NavRail inherits Rectangle {
     in property <length> top-inset;
     in property <length> bottom-inset;
     callback go(int);
-    width: 112px;
+    // Wider with larger text: «Маршрутизация» fits in full.
+    width: 112px * max(1.0, Theme.text-scale);
     background: Theme.card;
     VerticalLayout {
         padding-top: root.top-inset + 12px;
@@ -3772,7 +3775,7 @@ export component AppWindow inherits Window {
     // A floating window's caption (Android's freeform, the makers' own
     // floating windows) covers the top: Slint's safe area leaves it out.
     property <length> top: max(root.safe-area-insets.top, AppState.caption-top);
-    property <length> bottom: root.safe-area-insets.bottom;
+    property <length> bottom: max(root.safe-area-insets.bottom, AppState.bars-bottom);
     // Std-widget defaults (text without its own color, spinners) follow the
     // chosen theme, not the phone's scheme: 0 system, 1 dark, 2 light.
     property <int> scheme: Theme.follow-system ? 0 : Theme.c-light ? 2 : 1;
@@ -3823,11 +3826,15 @@ export component AppWindow inherits Window {
     // changes: a binding on it would loop through the window's own layout.
     property <bool> wide;
     property <length> side: 12px;
-    property <length> rail-w: root.wide ? 112px : 0px;
+    property <length> rail-w: root.wide ? 112px * max(1.0, Theme.text-scale) : 0px;
+    property <float> text-scale: Theme.text-scale;
+    changed text-scale => {
+        root.relayout();
+    }
     property <length> content-w: root.width - root.rail-w - root.safe-area-insets.left - root.safe-area-insets.right;
     function relayout() {
         root.wide = root.width >= 600px;
-        root.side = Theme.gutter(root.width - (root.wide ? 112px : 0px) - root.safe-area-insets.left - root.safe-area-insets.right, 12px);
+        root.side = Theme.gutter(root.width - (root.wide ? 112px * max(1.0, Theme.text-scale) : 0px) - root.safe-area-insets.left - root.safe-area-insets.right, 12px);
     }
     changed width => {
         root.relayout();
