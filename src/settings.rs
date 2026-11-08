@@ -48,7 +48,9 @@ pub struct MobileSettings {
     /// «Подключаться без Wi-Fi»: leaving Wi-Fi for mobile data connects.
     pub connect_off_wifi: bool,
     /// «Отключать на Wi-Fi» (with connect_off_wifi): back on Wi-Fi, a
-    /// connection made on mobile data ends.
+    /// connection made on mobile data ends. Off by default; saved under a
+    /// new name because 0.1.5 had it on and wrote that into mobile.json.
+    #[serde(rename = "disconnect_on_wifi_v2")]
     pub disconnect_on_wifi: bool,
     /// «Режим работы»: VPN, VPN with a proxy next to it, or the proxy alone.
     pub tunnel: TunnelMode,
@@ -138,7 +140,7 @@ impl Default for MobileSettings {
             failover_secs: 15,
             reserve: Vec::new(),
             connect_off_wifi: false,
-            disconnect_on_wifi: true,
+            disconnect_on_wifi: false,
             keep_connected: false,
             live_ping: true,
             kill_switch: false,
@@ -263,6 +265,15 @@ mod tests {
         let saved = serde_json::to_value(&rules).unwrap();
         assert!(saved.get("packages").is_none());
         assert_eq!(new_password().len(), 12);
+    }
+
+    #[test]
+    fn disconnect_on_wifi_is_off_unless_turned_on_again() {
+        let old: MobileSettings = serde_json::from_str(r#"{"disconnect_on_wifi": true}"#).unwrap();
+        assert!(!old.disconnect_on_wifi);
+        let on = MobileSettings { disconnect_on_wifi: true, ..Default::default() };
+        let back: MobileSettings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.disconnect_on_wifi);
     }
 
     #[test]

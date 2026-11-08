@@ -269,7 +269,7 @@ static KILL_SWITCH: AtomicBool = AtomicBool::new(false);
 
 /// MobileSettings::connect_off_wifi and ::disconnect_on_wifi.
 static CONNECT_OFF_WIFI: AtomicBool = AtomicBool::new(false);
-static DISCONNECT_ON_WIFI: AtomicBool = AtomicBool::new(true);
+static DISCONNECT_ON_WIFI: AtomicBool = AtomicBool::new(false);
 
 pub fn set_connect_off_wifi(on: bool, disconnect_on_wifi: bool) {
     CONNECT_OFF_WIFI.store(on, Ordering::Relaxed);
