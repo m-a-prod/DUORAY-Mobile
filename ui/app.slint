@@ -290,7 +290,9 @@ export global AppState {
     in-out property <string> edit-error;
     in property <bool> edit-edited;
     in property <bool> edit-pinned;
-    in property <bool> edit-reserve;
+    // Two-way: Rust turns one off when the other is turned on.
+    in-out property <bool> edit-reserve;
+    in-out property <bool> edit-no-failover;
     in property <bool> expiry-can-renew;
 }
 
@@ -337,6 +339,7 @@ export global Actions {
     callback set-server-pinned(bool);
     callback pin-widget(string);
     callback set-server-reserve(bool);
+    callback set-server-no-failover(bool);
     callback request-background();
     callback request-local-network();
     callback filter-picker(string);
@@ -2223,7 +2226,7 @@ component SettingsPage inherits Rectangle {
                         }
                         ToggleRow {
                             title: "Держать подключение";
-                            hint: !AppState.live-ping ? "Нужен «Живой пинг»: без него DUORAY не узнает, что сервер перестал отвечать." : AppState.reserve-count > 0 ? "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на самый быстрый по последнему пингу из резерва (серверов: " + AppState.reserve-count + ")." : "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на другой сервер той же подписки, самый быстрый по последнему пингу. Свой резерв: откройте сервер (›) и включите «В резерве».";
+                            hint: !AppState.live-ping ? "Нужен «Живой пинг»: без него DUORAY не узнает, что сервер перестал отвечать." : AppState.reserve-count > 0 ? "Если сервер перестал отвечать, DUORAY проверит серверы резерва (их " + AppState.reserve-count + ") и перейдёт на первый ответивший, начиная с самого быстрого. Не ответил никто — значит, пропал интернет: подключение остаётся." : "Если сервер перестал отвечать, DUORAY проверит другие серверы той же подписки и перейдёт на первый ответивший, начиная с самого быстрого. Не ответил никто — значит, пропал интернет: подключение остаётся. Свой резерв или исключения: откройте сервер (›).";
                             checked: AppState.keep-connected;
                             toggled(on) => {
                                 Actions.set-keep-connected(on);
@@ -3236,9 +3239,17 @@ component ServerPage inherits Rectangle {
                     ToggleRow {
                         title: "В резерве";
                         hint: "«Держать подключение» переключает только на серверы резерва, на самый быстрый по пингу. В списке — значок с круговыми стрелками.";
-                        checked: AppState.edit-reserve;
+                        checked <=> AppState.edit-reserve;
                         toggled(on) => {
                             Actions.set-server-reserve(on);
+                        }
+                    }
+                    ToggleRow {
+                        title: "Исключить из переключения";
+                        hint: "«Держать подключение» никогда не перейдёт на этот сервер: например, если он работает только в мобильной сети.";
+                        checked <=> AppState.edit-no-failover;
+                        toggled(on) => {
+                            Actions.set-server-no-failover(on);
                         }
                     }
                 }

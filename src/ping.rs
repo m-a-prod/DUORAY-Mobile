@@ -193,6 +193,16 @@ fn proxy_request(agent: &ureq::Agent, url: &str, head: bool, drain: bool) -> Res
     Ok(elapsed)
 }
 
+/// Whether `server` carries traffic at all: the ping URL through its own
+/// throwaway xray, whatever the list's ping mode (a TCP or ICMP answer says
+/// nothing about the proxy). "Держать подключение" checks a server with it
+/// before moving to it.
+pub fn check(server: &Server, s: &PingSettings, host: &Host) -> Result<Duration> {
+    through_server(server, host, "failover", |socks, user, pass| {
+        via_socks_mode(socks, user, pass, &s.url, s.mode == PingMode::HttpHead, Duration::from_secs(5), s.proxy_mode)
+    })
+}
+
 /// Label and level of a ping chip, as on the desktop: 1 fast, 2 medium,
 /// 3 slow, 4 failed.
 pub fn label(result: &Result<Duration, String>) -> (String, i32) {

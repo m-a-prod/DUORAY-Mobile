@@ -48,6 +48,14 @@ struct App {
     live_failures: u32,
     /// Servers "Держать подключение" already moved away from.
     failover_tried: HashSet<String>,
+    /// Servers being checked for «Держать подключение» right now.
+    failover_busy: bool,
+    /// Live pings answered so far: a check that finds the connected server
+    /// answering again meanwhile changes nothing.
+    live_answers: u64,
+    /// After a round where no server answered (the internet is gone), the
+    /// next waits: each round starts throwaway xrays.
+    failover_quiet_until: Option<Instant>,
     ticks: u32,
     /// Stops the running ping check.
     ping_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -82,6 +90,9 @@ fn with_app(f: impl FnOnce(&mut App)) {
         f(&mut app.borrow_mut());
     }
 }
+
+/// Servers «Держать подключение» checks in one round before staying put.
+const FAILOVER_CHECKS: usize = 5;
 
 /// Runs `f` on the UI thread with the app, from any thread.
 /// Whether Android leaves DUORAY alone in the background (Android reports it
@@ -176,6 +187,9 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         live_busy: false,
         live_failures: 0,
         failover_tried: HashSet::new(),
+        failover_busy: false,
+        live_answers: 0,
+        failover_quiet_until: None,
         ticks: 0,
         editing: None,
         ping_cancel: None,
@@ -395,6 +409,7 @@ fn wire(ui: &AppWindow) {
     });
     a.on_set_server_pinned(|on| with_app(|app| app.set_server_pinned(on)));
     a.on_set_server_reserve(|on| with_app(|app| app.set_server_reserve(on)));
+    a.on_set_server_no_failover(|on| with_app(|app| app.set_server_no_failover(on)));
     a.on_set_kill_switch(|on| {
         with_app(|app| {
             app.settings.kill_switch = on;
@@ -1148,7 +1163,9 @@ impl App {
                 app.save_pings();
                 if answered {
                     app.live_failures = 0;
+                    app.live_answers += 1;
                     app.failover_tried.clear();
+                    app.failover_quiet_until = None;
                 } else {
                     app.live_failures += 1;
                 }
@@ -1156,7 +1173,8 @@ impl App {
                 app.render_connection();
                 // Pings go every 5 s: the setting in seconds, in misses.
                 let allowed = app.settings.failover_secs.div_ceil(5).max(1);
-                if app.live_failures >= allowed && app.settings.keep_connected {
+                let quiet = app.failover_quiet_until.is_some_and(|t| Instant::now() < t);
+                if app.live_failures >= allowed && app.settings.keep_connected && !app.failover_busy && !quiet {
                     app.live_failures = 0;
                     app.failover(&key);
                 }
@@ -1180,11 +1198,13 @@ impl App {
         }
     }
 
-    /// «В резерве» on the server page.
+    /// «В резерве» on the server page. A server in the reserve is not
+    /// excluded from switching.
     fn set_server_reserve(&mut self, on: bool) {
         let Some(key) = self.editing_key() else { return };
         self.settings.reserve.retain(|k| *k != key);
         if on {
+            self.settings.no_failover.retain(|k| *k != key);
             self.settings.reserve.push(key);
         }
         self.save_settings();
@@ -1192,6 +1212,29 @@ impl App {
         self.render_settings();
         if let Some(ui) = self.ui() {
             ui.global::<AppState>().set_edit_reserve(on);
+            if on {
+                ui.global::<AppState>().set_edit_no_failover(false);
+            }
+        }
+    }
+
+    /// «Исключить из переключения» on the server page: «Держать
+    /// подключение» never moves to it (it leaves the reserve too).
+    fn set_server_no_failover(&mut self, on: bool) {
+        let Some(key) = self.editing_key() else { return };
+        self.settings.no_failover.retain(|k| *k != key);
+        if on {
+            self.settings.reserve.retain(|k| *k != key);
+            self.settings.no_failover.push(key);
+        }
+        self.save_settings();
+        self.render_servers();
+        self.render_settings();
+        if let Some(ui) = self.ui() {
+            ui.global::<AppState>().set_edit_no_failover(on);
+            if on {
+                ui.global::<AppState>().set_edit_reserve(false);
+            }
         }
     }
 
@@ -1205,65 +1248,113 @@ impl App {
         self.settings.reserve.iter().filter(|k| servers::find(&self.store, k).is_some()).cloned().collect()
     }
 
-    /// Moves the connection from the silent server `key` to the fastest other
-    /// server of its subscription by the last ping (unmeasured next, failed
-    /// and already tried ones never), as the desktop app does. With a reserve
-    /// set up, only to its servers.
-    fn failover(&mut self, key: &str) {
-        self.failover_tried.insert(key.to_string());
-        let from = self.server_name(Some(key));
+    /// Where «Держать подключение» may move from the silent server `key`,
+    /// best first: the reserve if there is one; else the server this network
+    /// is set to (a hand pick or the rule's auto-select), then the others of
+    /// its subscription by the last ping (unmeasured next; on Wi-Fi the ones
+    /// made for mobile whitelists, "LTE", last). Never the excluded ones,
+    /// the ones already tried or whose last ping failed.
+    fn failover_candidates(&self, key: &str) -> Vec<String> {
+        let usable = |k: &String| {
+            k != key && !self.failover_tried.contains(k) && !self.settings.no_failover.contains(k) && !matches!(self.pings.get(k), Some(Err(_)))
+        };
+        let by_ping = |list: Vec<(usize, String, bool)>| {
+            let mut list: Vec<_> = list.into_iter().filter(|(_, k, _)| usable(k)).collect();
+            list.sort_by_key(|(i, k, last)| (*last, ping::sort_key(self.pings.get(k)), *i));
+            list.into_iter().map(|(_, k, _)| k).collect::<Vec<_>>()
+        };
         let reserve: Vec<String> = self.reserve_keys().into_iter().filter(|k| k != key).collect();
         if !reserve.is_empty() {
-            let pick = reserve
-                .iter()
-                .enumerate()
-                .filter(|(_, k)| !self.failover_tried.contains(*k) && !matches!(self.pings.get(*k), Some(Err(_))))
-                .min_by_key(|(i, k)| (ping::sort_key(self.pings.get(*k)), *i))
-                .map(|(_, k)| k.clone());
-            let Some(next) = pick else {
-                self.failover_tried.clear();
-                return self.toast("Серверы резерва не отвечают. Проверьте интернет".into());
-            };
-            let to = self.server_name(Some(&next));
-            self.store.settings.last_server = Some(next.clone());
-            self.save_store();
-            self.toast(format!("«{from}» не отвечает, переключаемся на «{to}» из резерва"));
-            return service::switch_to(&next);
+            return by_ping(reserve.into_iter().enumerate().map(|(i, k)| (i, k, false)).collect());
         }
-        // The server this network is set to (a hand pick or the rule's
-        // auto-select) comes first: it knows better than the last pings.
-        if let Some(target) = service::network_target().filter(|t| t != key && !self.failover_tried.contains(t)) {
-            let to = self.server_name(Some(&target));
-            self.toast(format!("«{}» не отвечает, переключаемся на «{to}»", self.server_name(Some(key))));
-            return service::switch_to(&target);
-        }
-        let Some(sub) = self.store.subscriptions.iter().find(|s| s.servers.iter().any(|x| servers::key_of(s, x) == key)) else { return };
-        // On Wi-Fi the servers made for mobile whitelists ("LTE") are a last
-        // resort: a regular one is what was lost.
+        let mut out: Vec<String> = service::network_target().filter(|t| usable(t)).into_iter().collect();
+        let Some(sub) = self.store.subscriptions.iter().find(|s| s.servers.iter().any(|x| servers::key_of(s, x) == key)) else { return out };
         let wifi = self.conn.net.kind == NetKind::Wifi;
-        let pick = sub
+        let rest = sub
             .servers
             .iter()
             .enumerate()
-            .map(|(i, s)| (i, servers::key_of(sub, s)))
-            .filter(|(_, k)| k != key && !self.failover_tried.contains(k) && !matches!(self.pings.get(k), Some(Err(_))))
-            .min_by_key(|(i, k)| {
-                let mobile_only = wifi && sub.servers[*i].name.to_lowercase().contains("lte");
-                (mobile_only, ping::sort_key(self.pings.get(k)), *i)
-            });
-        match pick {
-            None => {
-                self.failover_tried.clear();
-                self.toast("Серверы подписки не отвечают. Проверьте интернет".into());
-            }
-            Some((i, next)) => {
-                let to = display_name(&sub.servers[i].name).1;
-                self.store.settings.last_server = Some(next.clone());
-                self.save_store();
-                self.toast(format!("«{from}» не отвечает, переключаемся на «{to}»"));
-                service::switch_to(&next);
+            .map(|(i, s)| (i, servers::key_of(sub, s), wifi && s.name.to_lowercase().contains("lte")))
+            .collect();
+        for k in by_ping(rest) {
+            if !out.contains(&k) {
+                out.push(k);
             }
         }
+        out
+    }
+
+    /// The connected server `key` stopped answering: the candidates are
+    /// checked one by one through their own xray (the last pings can be
+    /// hours old) and the connection moves to the first that answers. None
+    /// answering means the internet is gone, not the server: the connection
+    /// stays where it is, and the next round waits a minute.
+    fn failover(&mut self, key: &str) {
+        self.failover_tried.insert(key.to_string());
+        let from = self.server_name(Some(key));
+        let in_reserve = !self.reserve_keys().iter().all(|k| k == key);
+        let jobs: Vec<(String, Server)> = self
+            .failover_candidates(key)
+            .into_iter()
+            .filter_map(|k| servers::find(&self.store, &k).map(|(_, s)| (k, s.clone())))
+            .take(FAILOVER_CHECKS)
+            .collect();
+        if jobs.is_empty() {
+            self.failover_tried.clear();
+            return self.toast(format!("«{from}» не отвечает, а переключиться не на что"));
+        }
+        crate::diag::log(format!("keep connected: checking {} servers", jobs.len()));
+        self.failover_busy = true;
+        let answers = self.live_answers;
+        let (host, ping, key) = (self.host.clone(), self.store.settings.ping.clone(), key.to_string());
+        std::thread::spawn(move || {
+            let mut found = None;
+            let mut failed = Vec::new();
+            for (k, server) in jobs {
+                match ping::check(&server, &ping, &host) {
+                    Ok(d) => {
+                        found = Some((k, d));
+                        break;
+                    }
+                    Err(e) => failed.push((k, format!("{e:#}"))),
+                }
+            }
+            later(move |app| {
+                app.failover_busy = false;
+                // With nobody answering it is the internet that failed, not
+                // the servers: their rows keep the pings they had.
+                if let Some((k, d)) = &found {
+                    for (k, e) in failed {
+                        app.failover_tried.insert(k.clone());
+                        app.pings.insert(k, Err(e));
+                    }
+                    app.pings.insert(k.clone(), Ok(*d));
+                    app.save_pings();
+                    app.render_servers();
+                }
+                // Answering again, switched or disconnected meanwhile.
+                if app.live_answers != answers || app.conn.server.as_deref() != Some(key.as_str()) {
+                    return;
+                }
+                match found {
+                    Some((next, _)) => {
+                        let to = app.server_name(Some(&next));
+                        crate::diag::log("keep connected: switching");
+                        app.store.settings.last_server = Some(next.clone());
+                        app.save_store();
+                        let reserve = if in_reserve { " из резерва" } else { "" };
+                        app.toast(format!("«{from}» не отвечает, переключаемся на «{to}»{reserve}"));
+                        service::switch_to(&next);
+                    }
+                    None => {
+                        crate::diag::log("keep connected: no server answers, staying");
+                        app.failover_tried.clear();
+                        app.failover_quiet_until = Some(Instant::now() + Duration::from_secs(60));
+                        app.toast(format!("«{from}» не отвечает, другие серверы тоже: похоже, пропал интернет. Остаёмся на «{from}»"));
+                    }
+                }
+            });
+        });
     }
 
     fn save_pings(&self) {
@@ -1329,6 +1420,7 @@ impl App {
         let key = servers::key_of(sub, s);
         st.set_edit_pinned(self.store.settings.favorites.contains(&key));
         st.set_edit_reserve(self.settings.reserve.contains(&key));
+        st.set_edit_no_failover(self.settings.no_failover.contains(&key));
         self.editing = Some((sub.id.clone(), index));
         ui.invoke_open_server_page();
     }
@@ -1376,8 +1468,8 @@ impl App {
         if self.store.settings.last_server.as_deref() == Some(old_key.as_str()) {
             self.store.settings.last_server = Some(new_key.clone());
         }
-        // Pinned and in the reserve under its new key.
-        for k in self.store.settings.favorites.iter_mut().chain(self.settings.reserve.iter_mut()) {
+        // Pinned, in the reserve and excluded under its new key.
+        for k in self.store.settings.favorites.iter_mut().chain(self.settings.reserve.iter_mut()).chain(self.settings.no_failover.iter_mut()) {
             if *k == old_key {
                 k.clone_from(&new_key);
             }

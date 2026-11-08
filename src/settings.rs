@@ -45,6 +45,9 @@ pub struct MobileSettings {
     /// «Резерв»: servers (by key) a silent one is replaced with, the fastest
     /// by the last ping. Empty: any server of its subscription.
     pub reserve: Vec<String>,
+    /// «Исключить из переключения»: servers (by key) «Держать подключение»
+    /// never moves to.
+    pub no_failover: Vec<String>,
     /// «Подключаться без Wi-Fi»: leaving Wi-Fi for mobile data connects.
     pub connect_off_wifi: bool,
     /// «Отключать на Wi-Fi» (with connect_off_wifi): back on Wi-Fi, a
@@ -145,6 +148,7 @@ impl Default for MobileSettings {
             quiet_notification: false,
             failover_secs: 15,
             reserve: Vec::new(),
+            no_failover: Vec::new(),
             connect_off_wifi: false,
             disconnect_on_wifi: false,
             keep_connected: false,
