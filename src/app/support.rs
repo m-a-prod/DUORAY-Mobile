@@ -104,6 +104,7 @@ impl App {
                 "network_rules": self.settings.policy.ssids.len(),
                 "keep_connected": self.settings.keep_connected,
                 "failover_secs": self.settings.failover_secs,
+                "live_ping": self.settings.live_ping,
                 "kill_switch": self.settings.kill_switch,
                 "share": self.settings.share.enabled,
                 "core": self.settings.core.is_some(),

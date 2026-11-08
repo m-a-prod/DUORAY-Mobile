@@ -57,6 +57,7 @@ object Native {
             ConnectionStatus.current = status
             DuorayVpnService.instance?.refreshNotification()
             DuorayTileService.listening?.show()
+            app?.let { Widgets.statusChanged(it) }
             app?.let { context ->
                 runCatching { TileService.requestListeningState(context, ComponentName(context, DuorayTileService::class.java)) }
             }
@@ -116,6 +117,15 @@ object Native {
 
     /** Connect to the last server, or disconnect. */
     @JvmStatic external fun toggle()
+
+    /** A pinned server tapped in a home screen widget: connect or switch to it. */
+    @JvmStatic external fun connectTo(key: String)
+
+    /** Rust rewrote files/widgets.json (the theme or the pinned servers). */
+    @JvmStatic
+    fun refreshWidgets(@Suppress("UNUSED_PARAMETER") unused: String) {
+        app?.let { Widgets.refresh(it) }
+    }
 }
 
 /** The connection as Rust last described it (src/status.rs, Notice::pack). */
@@ -133,6 +143,8 @@ data class ConnectionStatus(
     val promote: Boolean,
     /** «Свернуть уведомление»: the minimal channel. */
     val quiet: Boolean,
+    /** The server's key (src/servers.rs), for the favorites widget: last, it holds U+001F itself. */
+    val key: String = "",
 ) {
     val active: Boolean get() = state == 1 || state == 2
 
@@ -142,7 +154,7 @@ data class ConnectionStatus(
         fun parse(packed: String): ConnectionStatus {
             val f = packed.split('\u001f')
             fun at(i: Int) = f.getOrElse(i) { "" }
-            return ConnectionStatus(at(0).toIntOrNull() ?: 0, at(1), at(2), at(3), at(4), at(5).toLongOrNull() ?: 0, at(6) != "0", at(7) == "1")
+            return ConnectionStatus(at(0).toIntOrNull() ?: 0, at(1), at(2), at(3), at(4), at(5).toLongOrNull() ?: 0, at(6) != "0", at(7) == "1", f.drop(8).joinToString("\u001f"))
         }
     }
 }

@@ -157,6 +157,14 @@ impl Platform for Android {
         }
     }
 
+    fn pin_widget(&self, kind: &str) {
+        call(&ACTIVITY, jni_str!("pinWidget"), Some(kind));
+    }
+
+    fn refresh_widgets(&self) {
+        call_static(jni_str!("refreshWidgets"), "");
+    }
+
     fn rebuild_vpn(&self) {
         call(&VPN, jni_str!("rebuildFromNative"), None);
     }
@@ -332,6 +340,17 @@ pub extern "system" fn Java_space_dualizm_duoray_Native_back<'a>(mut env: EnvUno
 pub extern "system" fn Java_space_dualizm_duoray_Native_toggle<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>) {
     env.with_env(|_env| -> jni::errors::Result<()> {
         std::thread::spawn(crate::toggle);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `Native.connectTo(key)`: a pinned server tapped in a home screen widget.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_connectTo<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, key: JString<'a>) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let key = string(env, &key)?;
+        std::thread::spawn(move || crate::connect_to(key));
         Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>()

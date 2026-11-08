@@ -124,6 +124,16 @@ fn later(f: impl FnOnce(&mut App) + Send + 'static) {
     let _ = slint::invoke_from_event_loop(move || with_app(f));
 }
 
+/// A server chosen outside the window (a home screen widget): the open
+/// window keeps it as its selection, so its next save does not undo it.
+pub fn adopt_selection(key: String) {
+    later(move |app| {
+        app.store.settings.last_server = Some(key);
+        app.render_servers();
+        app.render_connection();
+    });
+}
+
 /// Shows the window until the platform closes it. `setup` runs once the
 /// window is built (the preview uses it for screenshots).
 pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
@@ -175,6 +185,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         poll_timer: slint::Timer::default(),
         update_timer: slint::Timer::default(),
     };
+    crate::widgets::write(&host.data, &app.store);
     APP.with(|a| *a.borrow_mut() = Some(Rc::new(RefCell::new(app))));
     wire(&ui);
     ui.global::<AppState>().set_version(env!("CARGO_PKG_VERSION").into());
@@ -343,6 +354,14 @@ fn wire(ui: &AppWindow) {
     a.on_install_core(|tag| with_app(|app| app.install_core(&tag)));
     a.on_select_core(|tag| with_app(|app| app.select_core(&tag)));
     a.on_remove_core(|tag| with_app(|app| app.remove_core(&tag)));
+    a.on_set_live_ping(|on| {
+        with_app(|app| {
+            app.settings.live_ping = on;
+            app.live_failures = 0;
+            app.save_settings();
+            app.render_settings();
+        })
+    });
     a.on_set_connect_off_wifi(|on| {
         with_app(|app| {
             app.settings.connect_off_wifi = on;
@@ -358,6 +377,11 @@ fn wire(ui: &AppWindow) {
             app.save_settings();
             app.render_settings();
         })
+    });
+    a.on_pin_widget(|kind| {
+        if let Some(p) = service::platform() {
+            p.pin_widget(&kind);
+        }
     });
     a.on_set_server_pinned(|on| with_app(|app| app.set_server_pinned(on)));
     a.on_set_server_reserve(|on| with_app(|app| app.set_server_reserve(on)));
@@ -627,6 +651,8 @@ impl App {
     }
 
     fn save_store(&mut self) {
+        // Pins, the theme and the last server show in the home screen widgets.
+        crate::widgets::write(&self.host.data, &self.store);
         if let Err(e) = self.store.save(&self.host.store()) {
             self.toast(format!("Не удалось сохранить: {e:#}"));
         }
@@ -881,6 +907,7 @@ impl App {
             speeds: self.traffic.as_ref().filter(|_| connected).map(Traffic::speeds).unwrap_or_default(),
             chip: exit_line.map(|(_, chip)| chip).unwrap_or_default(),
             since_ms: crate::status::since_ms(),
+            key: server.clone().unwrap_or_default(),
         });
     }
 
@@ -939,6 +966,7 @@ impl App {
         st.set_quiet_notification(self.settings.quiet_notification);
         st.set_kill_switch(self.settings.kill_switch);
         st.set_connect_off_wifi(self.settings.connect_off_wifi);
+        st.set_live_ping(self.settings.live_ping);
         st.set_disconnect_on_wifi(self.settings.disconnect_on_wifi);
         st.set_reserve_count(self.reserve_keys().len() as i32);
         st.set_failover_secs(self.settings.failover_secs as i32);
@@ -1048,7 +1076,7 @@ impl App {
     fn poll(&mut self) {
         self.trace_exit();
         self.ticks = self.ticks.wrapping_add(1);
-        if self.ticks % 5 == 0 {
+        if self.ticks % 5 == 0 && self.settings.live_ping {
             self.live_ping();
         }
         let Some(link) = self.conn.link.clone() else { return };

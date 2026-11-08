@@ -250,6 +250,7 @@ export global AppState {
     in property <bool> quiet-notification;
     in property <bool> kill-switch;
     in property <bool> connect-off-wifi;
+    in property <bool> live-ping: true;
     in property <bool> disconnect-on-wifi: true;
     // Servers in «Резерв» that still exist.
     in property <int> reserve-count;
@@ -320,8 +321,10 @@ export global Actions {
     callback set-quiet-notification(bool);
     callback set-kill-switch(bool);
     callback set-connect-off-wifi(bool);
+    callback set-live-ping(bool);
     callback set-disconnect-on-wifi(bool);
     callback set-server-pinned(bool);
+    callback pin-widget(string);
     callback set-server-reserve(bool);
     callback request-background();
     callback request-local-network();
@@ -2149,8 +2152,16 @@ component SettingsPage inherits Rectangle {
                             }
                         }
                         ToggleRow {
+                            title: "Живой пинг";
+                            hint: "Пока DUORAY открыт, раз в 5 секунд проверяет задержку подключённого сервера. Выключите, если оператор режет частые запросы: тогда «Держать подключение» не заметит, что сервер перестал отвечать.";
+                            checked: AppState.live-ping;
+                            toggled(on) => {
+                                Actions.set-live-ping(on);
+                            }
+                        }
+                        ToggleRow {
                             title: "Держать подключение";
-                            hint: AppState.reserve-count > 0 ? "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на самый быстрый по последнему пингу из резерва (серверов: " + AppState.reserve-count + ")." : "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на другой сервер той же подписки, самый быстрый по последнему пингу. Свой резерв: откройте сервер (›) и включите «В резерве».";
+                            hint: !AppState.live-ping ? "Нужен «Живой пинг»: без него DUORAY не узнает, что сервер перестал отвечать." : AppState.reserve-count > 0 ? "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на самый быстрый по последнему пингу из резерва (серверов: " + AppState.reserve-count + ")." : "Если сервер перестал отвечать, а интернет есть, DUORAY перейдёт на другой сервер той же подписки, самый быстрый по последнему пингу. Свой резерв: откройте сервер (›) и включите «В резерве».";
                             checked: AppState.keep-connected;
                             toggled(on) => {
                                 Actions.set-keep-connected(on);
@@ -2324,6 +2335,59 @@ component SettingsPage inherits Rectangle {
                             }
                             Rectangle {
                                 horizontal-stretch: 1;
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-top: 6px;
+                    SectionLabel {
+                        text: "ВИДЖЕТЫ";
+                    }
+                }
+                Card {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        Text {
+                            text: "Подключение, страна и скорость на главном экране. Нажмите — DUORAY предложит поставить виджет, его можно растянуть.";
+                            font-size: Theme.fs-caption;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Кнопка";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.pin-widget("button");
+                                }
+                            }
+                            Button {
+                                text: "Подключение";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.pin-widget("status");
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Подробно";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.pin-widget("detail");
+                                }
+                            }
+                            Button {
+                                text: "Избранное";
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Actions.pin-widget("favorites");
+                                }
                             }
                         }
                     }

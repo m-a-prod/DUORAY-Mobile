@@ -22,6 +22,7 @@ mod testing;
 mod themes;
 mod tunnel;
 mod update;
+mod widgets;
 
 slint::include_modules!();
 
@@ -49,6 +50,30 @@ pub fn toggle() {
         .and_then(|h| duoray_core::store::Store::load(&h.store()).ok())
         .and_then(|s| s.settings.last_server);
     service::connect(last);
+}
+
+/// A pinned server tapped in a home screen widget: chosen as by hand in
+/// the list (over the network's rule) and connected to, or switched to.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn connect_to(key: String) {
+    if let Some(host) = service::host()
+        && let Ok(mut store) = duoray_core::store::Store::load(&host.store())
+        && store.settings.last_server.as_deref() != Some(key.as_str())
+    {
+        store.settings.last_server = Some(key.clone());
+        if let Err(e) = store.save(&host.store()) {
+            log::warn!("store.json: {e:#}");
+        }
+        widgets::write(&host.data, &store);
+    }
+    app::adopt_selection(key.clone());
+    service::pick(&key);
+    let snapshot = service::snapshot();
+    if matches!(snapshot.status, service::Status::On | service::Status::Connecting) {
+        service::switch_to(&key);
+    } else {
+        service::connect(Some(key));
+    }
 }
 
 /// What the platform's QR scanner read.

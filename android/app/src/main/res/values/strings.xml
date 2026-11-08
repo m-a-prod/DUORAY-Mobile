@@ -17,4 +17,25 @@
     <string name="shortcut_scan_long">Добавить подписку по QR-коду</string>
     <string name="shortcut_toggle">Подключить</string>
     <string name="shortcut_toggle_long">Подключить или отключить VPN</string>
+    <string name="widget_button">Кнопка</string>
+    <string name="widget_button_desc">Включить или выключить VPN одним касанием</string>
+    <string name="widget_status">Подключение</string>
+    <string name="widget_status_desc">Страна, сервер, пинг и кнопка</string>
+    <string name="widget_detail">Подробно</string>
+    <string name="widget_detail_desc">Страна, сервер, время и скорость подключения</string>
+    <string name="widget_favorites">Избранное</string>
+    <string name="widget_favorites_desc">Закреплённые серверы: касание подключает к нужному</string>
+    <string name="widget_connect">Подключить</string>
+    <string name="widget_disconnect">Отключить</string>
+    <string name="widget_servers">Серверы</string>
+    <string name="widget_off">Выключено</string>
+    <string name="widget_short_on">Вкл</string>
+    <string name="widget_short_off">Выкл</string>
+    <string name="widget_short_busy">…</string>
+    <string name="widget_on">Подключено</string>
+    <string name="widget_connecting">Подключение…</string>
+    <string name="widget_disconnecting">Отключение…</string>
+    <string name="widget_failed">Ошибка</string>
+    <string name="widget_no_favorites">Закрепите серверы в DUORAY: откройте сервер и включите «Закрепить вверху».</string>
+    <string name="widget_connect_to">Подключиться: %1$s</string>
 </resources>

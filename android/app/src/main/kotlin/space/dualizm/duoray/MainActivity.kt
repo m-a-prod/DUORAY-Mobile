@@ -113,6 +113,20 @@ class MainActivity : NativeActivity() {
         runCatching { startActivity(intent) }
     }
 
+    /** «Виджеты» in the settings: the launcher's own dialog puts one on the home screen. */
+    fun pinWidget(kind: String) = runOnUiThread {
+        val provider = when (kind) {
+            "status" -> StatusWidget::class.java
+            "detail" -> DetailWidget::class.java
+            "favorites" -> FavoritesWidget::class.java
+            else -> ButtonWidget::class.java
+        }
+        val manager = getSystemService(android.appwidget.AppWidgetManager::class.java)
+        if (manager?.isRequestPinAppWidgetSupported == true) {
+            manager.requestPinAppWidget(android.content.ComponentName(this, provider), null, null)
+        }
+    }
+
     /**
      * Android 17 keeps apps off the local network without this permission:
      * devices on the Wi-Fi or the hotspot could not reach the shared proxy.

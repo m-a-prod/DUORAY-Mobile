@@ -29,6 +29,10 @@ pub struct MobileSettings {
     pub core: Option<String>,
     /// «Свернуть уведомление»: the minimal channel, folded, no status bar icon.
     pub quiet_notification: bool,
+    /// «Живой пинг»: the connected server's delay every 5 s while the window
+    /// is open. Off: no pings at all (some operators throttle them), and
+    /// «Держать подключение» has nothing to go by.
+    pub live_ping: bool,
     /// «Держать подключение» (off by default: on a shaky Wi-Fi it moved
     /// people between servers they had not asked for).
     pub keep_connected: bool,
@@ -136,6 +140,7 @@ impl Default for MobileSettings {
             connect_off_wifi: false,
             disconnect_on_wifi: true,
             keep_connected: false,
+            live_ping: true,
             kill_switch: false,
             tunnel: TunnelMode::Vpn,
             share: ShareProxy::default(),

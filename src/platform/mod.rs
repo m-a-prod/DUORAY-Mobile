@@ -15,6 +15,11 @@ pub trait Platform: Send + Sync {
     fn stop_vpn(&self);
     /// Re-opens the TUN with the current per-app rules.
     fn rebuild_vpn(&self) {}
+    /// files/widgets.json changed: the home screen widgets redraw.
+    fn refresh_widgets(&self) {}
+    /// Asks the launcher to put a widget ("button", "status", "detail",
+    /// "favorites") on the home screen.
+    fn pin_widget(&self, _kind: &str) {}
     /// Asks for what lets the app read Wi-Fi names (location on Android).
     fn request_wifi_names(&self) {}
     fn open_url(&self, _url: &str) {}

@@ -100,6 +100,24 @@ pub fn apply(ui: &AppWindow, id: &str, text_scale: u32) {
     t.set_text_scale(text_scale.clamp(80, 150) as f32 / 100.0);
 }
 
+/// The theme's colors for the home screen widgets: "dark" and "light" are
+/// the same palette unless the theme follows the system ("system").
+pub fn widget_colors(id: &str) -> serde_json::Value {
+    let hex = |rgb: u32| format!("#{rgb:06x}");
+    let colors = |p: &Palette| {
+        serde_json::json!({
+            "light": p.light, "bg": hex(p.bg), "card": hex(p.card), "fg": hex(p.fg), "muted": hex(p.line),
+            "accent": hex(p.accent), "on_accent": hex(p.on_accent), "tonal": hex(p.tonal), "on_tonal": hex(p.on_tonal),
+            "outline": p.outline.map(hex),
+        })
+    };
+    let (_, _, palette) = &THEMES[index_of(id)];
+    match palette {
+        Some(p) => serde_json::json!({ "dark": colors(p), "light": colors(p) }),
+        None => serde_json::json!({ "dark": colors(&MATERIAL_DARK), "light": colors(&MATERIAL_LIGHT) }),
+    }
+}
+
 /// The tiles of the theme picker.
 pub fn swatches(current: &str) -> ModelRc<ThemeSwatch> {
     let current = index_of(current);

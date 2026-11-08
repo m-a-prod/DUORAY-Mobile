@@ -29,6 +29,9 @@ pub struct Notice {
     pub chip: String,
     /// When the connection came up, Unix milliseconds; 0 unknown.
     pub since_ms: i64,
+    /// The server's key: the favorites widget marks the one in use. Packed
+    /// last: it has U+001F in it.
+    pub key: String,
 }
 
 impl Notice {
@@ -45,6 +48,7 @@ impl Notice {
             self.since_ms.to_string(),
             live.to_string(),
             quiet.to_string(),
+            self.key.clone(),
         ]
         .join("\u{1f}")
     }
@@ -174,7 +178,8 @@ pub fn background(snapshot: Snapshot, host: Option<Arc<Host>>) {
             Status::On => ("Подключено".to_string(), server.clone()),
             Status::Failed(e) => ("Ошибка подключения".to_string(), e.lines().next().unwrap_or_default().to_string()),
         };
-        publish(Notice { state: state_code(&snapshot.status), title, text, since_ms: since_ms(), ..Default::default() });
+        let key = snapshot.server.clone().unwrap_or_default();
+        publish(Notice { state: state_code(&snapshot.status), title, text, since_ms: since_ms(), key, ..Default::default() });
         if let (Status::On, Some(link), Some(host)) = (&snapshot.status, snapshot.link, host)
             && BACKGROUND_STATS.load(Ordering::Relaxed)
         {
@@ -185,7 +190,7 @@ pub fn background(snapshot: Snapshot, host: Option<Arc<Host>>) {
                 }
                 *polled = Some(link.clone());
             }
-            poll(host, link.clone(), server);
+            poll(host, link.clone(), server, snapshot.server.unwrap_or_default());
             let mut polled = POLLED.lock().unwrap_or_else(|e| e.into_inner());
             if polled.as_ref() == Some(&link) {
                 *polled = None;
@@ -196,7 +201,7 @@ pub fn background(snapshot: Snapshot, host: Option<Arc<Host>>) {
 
 /// While this link is up and the window closed: speeds every few seconds,
 /// the exit country until it is known.
-fn poll(host: Arc<Host>, link: Link, server: String) {
+fn poll(host: Arc<Host>, link: Link, server: String, key: String) {
     let mut traffic: Option<Traffic> = None;
     let mut exit: Option<(String, String)> = None;
     let mut traced: Option<Instant> = None;
@@ -231,6 +236,7 @@ fn poll(host: Arc<Host>, link: Link, server: String) {
             speeds: traffic.as_ref().map(Traffic::speeds).unwrap_or_default(),
             chip,
             since_ms: since_ms(),
+            key: key.clone(),
         });
     }
 }
