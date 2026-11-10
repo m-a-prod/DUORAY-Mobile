@@ -129,10 +129,13 @@ fn check_at(hub: &str, proxy: Option<&str>) -> Result<Manifest> {
 
 /// Offered: a newer version, or the same version built from another commit
 /// (a fix shipped without a version bump), and only with an APK for this ABI.
+/// A build marked "-dirty" is its commit: 0.1.8 was built that way and
+/// offered itself the release of the same commit over and over.
 fn select(m: Manifest, current: &str, build: &str, key: &str) -> Option<Found> {
     let r = m.android?;
     let same_version = !newer(&r.version, current) && !newer(current, &r.version);
-    let rebuilt = same_version && !r.build.is_empty() && r.build != build;
+    let commit = |b: &str| b.trim_end_matches("-dirty").to_string();
+    let rebuilt = same_version && !r.build.is_empty() && commit(&r.build) != commit(build);
     if !newer(&r.version, current) && !rebuilt {
         return None;
     }
@@ -320,7 +323,9 @@ mod tests {
         let mut rebuilt = m.clone();
         rebuilt.android.as_mut().unwrap().build = "def".into();
         assert!(select(rebuilt.clone(), "0.2.0", "abc", arm).is_some());
-        assert!(select(rebuilt, "0.2.0", "def", arm).is_none(), "re-uploaded same build");
+        assert!(select(rebuilt.clone(), "0.2.0", "def", arm).is_none(), "re-uploaded same build");
+        assert!(select(rebuilt.clone(), "0.2.0", "def-dirty", arm).is_none(), "the same commit, built with a changed tree");
+        assert!(select(rebuilt, "0.2.0", "abc-dirty", arm).is_some());
 
         // Desktop-only manifests (before the first mobile release).
         let desktop: Manifest = serde_json::from_str(r#"{"version":"0.4.5","assets":{}}"#).unwrap();

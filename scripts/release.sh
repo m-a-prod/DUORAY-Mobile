@@ -77,6 +77,15 @@ if [ "$BUILD" = 1 ]; then
 fi
 for abi in arm64-v8a x86_64; do
     [ -f "$OUT/DUORAY-$VERSION-$abi.apk" ] || { echo "no $OUT/DUORAY-$VERSION-$abi.apk: build first" >&2; exit 1; }
+    # The library must carry exactly the commit the manifest will name: with
+    # another id (0.1.8 had "<commit>-dirty") the installed app takes the
+    # release for a rebuild and offers it as an update again and again.
+    ids=$(unzip -p "$OUT/DUORAY-$VERSION-$abi.apk" "lib/$abi/libduoray_mobile.so" | grep -a -o -E "$BUILD_ID(-dirty)?" | sort -u)
+    case "$ids" in
+        *-dirty*) echo "$abi: built from a changed tree ($BUILD_ID-dirty): not publishing" >&2; exit 1 ;;
+        "$BUILD_ID") ;;
+        *) echo "$abi: the library is not built from $BUILD_ID: not publishing" >&2; exit 1 ;;
+    esac
 done
 
 # The manifest as the hub serves it now, checked before it is signed again.

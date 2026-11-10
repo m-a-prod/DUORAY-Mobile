@@ -11,6 +11,10 @@ fn main() {
 /// DUORAY_BUILD: the git commit this library is built from ("-dirty" with
 /// uncommitted changes). Updates compare it with the manifest's, so a
 /// re-uploaded build of the same commit is not offered again.
+///
+/// Cargo.lock does not count: cargo rewrites it during the build when
+/// duoray-core next door (a path dependency) has a new version, which made
+/// the 0.1.8 release "-dirty" and offered to itself as an update forever.
 fn embed_build_id() {
     let git = |args: &[&str]| {
         std::process::Command::new("git")
@@ -21,7 +25,7 @@ fn embed_build_id() {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
     };
     let id = match git(&["rev-parse", "--short=12", "HEAD"]) {
-        Some(commit) if git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty()) => {
+        Some(commit) if git(&["status", "--porcelain", "--untracked-files=no", "--", ".", ":(exclude)Cargo.lock"]).is_some_and(|s| !s.is_empty()) => {
             format!("{commit}-dirty")
         }
         Some(commit) => commit,
