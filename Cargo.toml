@@ -1,6 +1,6 @@
 [package]
 name = "duoray-mobile"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 description = "DUORAY for Android (and later iOS): the desktop client's Slint UI over xray-core's TUN"
 license = "GPL-3.0-only"
@@ -56,3 +56,8 @@ debug = false
 [profile.release]
 lto = "thin"
 strip = true
+
+# Slint's Android backend with one change (vendor/README.md): frames drawn
+# on the vsync, not on every touch event.
+[patch.crates-io]
+i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }

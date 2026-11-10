@@ -774,6 +774,10 @@ component ServerItem inherits Rectangle {
     property <bool> held;
     height: 58px * Theme.text-scale;
     border-radius: Theme.radius;
+    // A row off screen is skipped whole, children and all: without a clip
+    // the renderer walked every element of all 80 rows on each frame of a
+    // scroll (it only skips drawing them).
+    clip: true;
     background: touch.pressed ? Theme.fg.with-alpha(0.06) : root.marked && !root.radio ? Theme.tonal : transparent;
     animate background { duration: 120ms; easing: ease-out; }
     touch := TouchArea {
@@ -1745,6 +1749,8 @@ component AppsPage inherits Rectangle {
                 alignment: start;
                 for app in AppState.apps: Rectangle {
                     height: 60px;
+                    // Off screen: skipped whole (see ServerItem).
+                    clip: true;
                     opacity: AppState.app-mode == 0 ? 0.5 : 1;
                     background: app-touch.pressed ? Theme.fg.with-alpha(0.06) : transparent;
                     app-touch := TouchArea {
@@ -2300,7 +2306,7 @@ component SettingsPage inherits Rectangle {
                         }
                         ToggleRow {
                             title: "Скорость в шторке в фоне";
-                            hint: "Пока приложение закрыто, уведомление показывает скорость и страну выхода: DUORAY раз в 3 секунды спрашивает счётчики у xray. Выключите, чтобы беречь батарею.";
+                            hint: "Пока приложение закрыто, уведомление показывает скорость и страну выхода: DUORAY раз в 3 секунды спрашивает счётчики у xray, только при включённом экране.";
                             checked: AppState.background-stats;
                             toggled(on) => {
                                 Actions.set-background-stats(on);
