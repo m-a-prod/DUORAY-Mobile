@@ -82,6 +82,13 @@ pub fn state_code(status: &Status) -> u8 {
 }
 
 static WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+/// The window is on screen (its activity started, not stopped). A window
+/// left behind the home screen or a locked screen lives on for hours: it
+/// kept reading the counters and updating the notification every second.
+static VISIBLE: AtomicBool = AtomicBool::new(true);
+/// The screen is on. Off (Always On Display counts) nobody sees the speeds,
+/// and every update of the notification lit the AOD up.
+static SCREEN_ON: AtomicBool = AtomicBool::new(true);
 /// MobileSettings::background_stats.
 static BACKGROUND_STATS: AtomicBool = AtomicBool::new(true);
 /// MobileSettings::live_update.
@@ -128,8 +135,26 @@ fn republish() {
     }
 }
 
+/// The window is open and on screen: the app publishes, not the poller.
 pub fn window_open() -> bool {
-    WINDOW_OPEN.load(Ordering::Relaxed)
+    WINDOW_OPEN.load(Ordering::Relaxed) && VISIBLE.load(Ordering::Relaxed)
+}
+
+/// The activity started or stopped. Hidden, the shade goes to the poller.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_visible(on: bool) {
+    if VISIBLE.swap(on, Ordering::Relaxed) != on && !on {
+        std::thread::spawn(|| background(service::snapshot(), service::host()));
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_screen_on(on: bool) {
+    SCREEN_ON.store(on, Ordering::Relaxed);
+}
+
+pub fn screen_on() -> bool {
+    SCREEN_ON.load(Ordering::Relaxed)
 }
 
 /// When the current connection came up (Unix ms), 0 when not connected.
@@ -180,7 +205,7 @@ pub fn background(snapshot: Snapshot, host: Option<Arc<Host>>) {
         };
         let key = snapshot.server.clone().unwrap_or_default();
         publish(Notice { state: state_code(&snapshot.status), title, text, since_ms: since_ms(), key, ..Default::default() });
-        if let (Status::On, Some(link), Some(host)) = (&snapshot.status, snapshot.link, host)
+        if let (Status::On, Some(link)) = (&snapshot.status, snapshot.link)
             && BACKGROUND_STATS.load(Ordering::Relaxed)
         {
             {
@@ -190,7 +215,7 @@ pub fn background(snapshot: Snapshot, host: Option<Arc<Host>>) {
                 }
                 *polled = Some(link.clone());
             }
-            poll(host, link.clone(), server, snapshot.server.unwrap_or_default());
+            poll(link.clone(), server, snapshot.server.unwrap_or_default());
             let mut polled = POLLED.lock().unwrap_or_else(|e| e.into_inner());
             if polled.as_ref() == Some(&link) {
                 *polled = None;
@@ -201,7 +226,7 @@ pub fn background(snapshot: Snapshot, host: Option<Arc<Host>>) {
 
 /// While this link is up and the window closed: speeds every few seconds,
 /// the exit country until it is known.
-fn poll(host: Arc<Host>, link: Link, server: String, key: String) {
+fn poll(link: Link, server: String, key: String) {
     let mut traffic: Option<Traffic> = None;
     let mut exit: Option<(String, String)> = None;
     let mut traced: Option<Instant> = None;
@@ -214,12 +239,12 @@ fn poll(host: Arc<Host>, link: Link, server: String, key: String) {
         if !BACKGROUND_STATS.load(Ordering::Relaxed) {
             return;
         }
-        if window_open() {
-            // The app publishes now; look again in case the window closes.
+        // The app publishes now, or the screen is off: look again later.
+        if window_open() || !screen_on() {
             traffic = None;
             continue;
         }
-        if let Ok(counts) = exit::counters(&host.xray, &link) {
+        if let Ok(counts) = exit::counters(&link) {
             traffic = Some(Traffic::read(traffic.as_ref(), Instant::now(), counts));
         }
         if exit.is_none() && traced.is_none_or(|t| t.elapsed() >= Duration::from_secs(15)) {

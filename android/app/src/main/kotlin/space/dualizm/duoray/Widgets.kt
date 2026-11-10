@@ -101,14 +101,20 @@ object Widgets {
             build(context, kind, data, w, h)
         }
         runCatching { manager.updateAppWidget(id, views) }
+        if (kind == Kind.FAVORITES) {
+            @Suppress("DEPRECATION")
+            runCatching { manager.notifyAppWidgetViewDataChanged(id, R.id.fav_list) }
+        }
     }
 
     /** Sizes (dp) with a layout of their own. */
     private fun sizes(kind: Kind): List<SizeF> = when (kind) {
         Kind.BUTTON -> listOf(SizeF(40f, 40f))
         Kind.STATUS -> listOf(SizeF(110f, 40f), SizeF(180f, 40f), SizeF(240f, 40f))
-        Kind.DETAIL -> listOf(SizeF(180f, 110f), SizeF(300f, 110f))
-        Kind.FAVORITES -> (0..6).flatMap { rows -> listOf(SizeF(110f, 60f + rows * 48f), SizeF(250f, 60f + rows * 48f)) }
+        // Heights where a line stops fitting (see detail()).
+        Kind.DETAIL -> listOf(110f, 132f, 162f, 190f).flatMap { h -> listOf(SizeF(180f, h), SizeF(300f, h)) }
+        // The rows scroll: only whether the hint under the heading fits.
+        Kind.FAVORITES -> listOf(SizeF(110f, 60f), SizeF(110f, 100f))
     }
 
     // ── what is shown ──────────────────────────────────────────────
@@ -193,7 +199,7 @@ object Widgets {
     private fun build(context: Context, kind: Kind, data: Data, w: Float, h: Float): RemoteViews = when (kind) {
         Kind.BUTTON -> button(context, data)
         Kind.STATUS -> status(context, data, w)
-        Kind.DETAIL -> detail(context, data, w)
+        Kind.DETAIL -> detail(context, data, w, h)
         Kind.FAVORITES -> favorites(context, data, h)
     }
 
@@ -234,9 +240,21 @@ object Widgets {
         return v
     }
 
-    private fun detail(context: Context, data: Data, w: Float): RemoteViews {
+    private fun detail(context: Context, data: Data, w: Float, h: Float): RemoteViews {
         val v = RemoteViews(context.packageName, R.layout.widget_detail)
         val c = data.colors
+        // Everything needs about 190 dp; a lower widget cut its buttons off.
+        // Lines go from the least needed: time and speeds, then the brand
+        // and state chip (the button says it), then the server line.
+        val full = h <= 0f || h >= 190f
+        val header = h <= 0f || h >= 162f
+        val tiny = h in 1f..131f
+        v.setViewVisibility(R.id.header, if (header) View.VISIBLE else View.GONE)
+        v.setViewVisibility(R.id.flag_box, if (tiny) View.GONE else View.VISIBLE)
+        if (tiny) {
+            val pad = (10 * context.resources.displayMetrics.density).toInt()
+            v.setViewPadding(R.id.content, pad, pad, pad, pad)
+        }
         tint(v, R.id.bg, c.card)
         v.setInt(R.id.brand_logo, "setColorFilter", c.fg)
         v.setTextColor(R.id.brand, c.fg)
@@ -261,10 +279,10 @@ object Widgets {
         v.setTextViewText(R.id.title, title)
         v.setTextColor(R.id.title, c.fg)
         v.setTextViewText(R.id.subtitle, sub)
-        v.setViewVisibility(R.id.subtitle, if (sub.isEmpty()) View.GONE else View.VISIBLE)
+        v.setViewVisibility(R.id.subtitle, if (sub.isEmpty() || tiny) View.GONE else View.VISIBLE)
         v.setTextColor(R.id.subtitle, if (data.state == 3) c.danger else c.muted)
         val on = data.state == 2
-        v.setViewVisibility(R.id.stats, if (on) View.VISIBLE else View.GONE)
+        v.setViewVisibility(R.id.stats, if (on && full) View.VISIBLE else View.GONE)
         if (on && data.status.sinceMs > 0) {
             val base = SystemClock.elapsedRealtime() - (System.currentTimeMillis() - data.status.sinceMs).coerceAtLeast(0)
             v.setChronometer(R.id.timer, base, null, true)
@@ -293,18 +311,9 @@ object Widgets {
         // Narrow: the list icon alone.
         v.setViewVisibility(R.id.servers_text, if (w >= 300f) View.VISIBLE else View.GONE)
         v.setContentDescription(R.id.servers, context.getString(R.string.widget_servers))
-        v.setOnClickPendingIntent(R.id.servers, openApp(context))
+        v.setOnClickPendingIntent(R.id.servers, openServers(context))
         return v
     }
-
-    private val rowIds = listOf(
-        intArrayOf(R.id.fav0, R.id.fav0_bg, R.id.fav0_flag, R.id.fav0_name, R.id.fav0_check),
-        intArrayOf(R.id.fav1, R.id.fav1_bg, R.id.fav1_flag, R.id.fav1_name, R.id.fav1_check),
-        intArrayOf(R.id.fav2, R.id.fav2_bg, R.id.fav2_flag, R.id.fav2_name, R.id.fav2_check),
-        intArrayOf(R.id.fav3, R.id.fav3_bg, R.id.fav3_flag, R.id.fav3_name, R.id.fav3_check),
-        intArrayOf(R.id.fav4, R.id.fav4_bg, R.id.fav4_flag, R.id.fav4_name, R.id.fav4_check),
-        intArrayOf(R.id.fav5, R.id.fav5_bg, R.id.fav5_flag, R.id.fav5_name, R.id.fav5_check),
-    )
 
     private fun favorites(context: Context, data: Data, h: Float): RemoteViews {
         val v = RemoteViews(context.packageName, R.layout.widget_favorites)
@@ -318,28 +327,44 @@ object Widgets {
         v.setOnClickPendingIntent(R.id.open, openApp(context))
         power(context, v, data, R.id.power, R.id.power_bg, R.id.power_icon)
 
-        val fits = ((h - 60f) / 48f).toInt().coerceIn(0, rowIds.size)
-        val shown = data.favorites.take(fits)
-        v.setViewVisibility(R.id.empty, if (data.favorites.isEmpty() && h >= 100f) View.VISIBLE else View.GONE)
+        v.setViewVisibility(R.id.empty, if (data.favorites.isEmpty() && (h <= 0f || h >= 100f)) View.VISIBLE else View.GONE)
         v.setTextColor(R.id.empty, c.muted)
         if (data.favorites.isEmpty()) v.setOnClickPendingIntent(R.id.empty, openApp(context))
-        val active = data.state == 1 || data.state == 2
-        for ((i, ids) in rowIds.withIndex()) {
-            val fav = shown.getOrNull(i)
-            v.setViewVisibility(ids[0], if (fav != null) View.VISIBLE else View.GONE)
-            if (fav == null) continue
-            val current = active && fav.key == data.status.key
-            tint(v, ids[1], if (current) c.accent else c.tonal)
-            v.setTextViewText(ids[2], fav.flag)
-            v.setTextViewText(ids[3], fav.name)
-            v.setTextColor(ids[3], if (current) c.onAccent else c.onTonal)
-            v.setViewVisibility(ids[4], if (current && data.state == 2) View.VISIBLE else View.GONE)
-            v.setInt(ids[4], "setColorFilter", c.onAccent)
-            v.setContentDescription(ids[0], context.getString(R.string.widget_connect_to, fav.name))
-            v.setOnClickPendingIntent(ids[0], action(context, WidgetActions.CONNECT, fav.key))
-        }
+        // The rows come from FavoritesService and scroll inside the widget.
+        val rows = Intent(context, FavoritesService::class.java).setData(android.net.Uri.parse("duoray://widget/favorites"))
+        @Suppress("DEPRECATION")
+        v.setRemoteAdapter(R.id.fav_list, rows)
+        v.setPendingIntentTemplate(R.id.fav_list, connectTemplate(context))
         return v
     }
+
+    /** The rows of «Избранное», as FavoritesService hands them out. */
+    fun favoriteRows(context: Context): List<RemoteViews> {
+        val data = Data.load(context)
+        val c = data.colors
+        val active = data.state == 1 || data.state == 2
+        return data.favorites.map { fav ->
+            val v = RemoteViews(context.packageName, R.layout.widget_favorite_row)
+            val current = active && fav.key == data.status.key
+            tint(v, R.id.row_bg, if (current) c.accent else c.tonal)
+            v.setTextViewText(R.id.row_flag, fav.flag)
+            v.setTextViewText(R.id.row_name, fav.name)
+            v.setTextColor(R.id.row_name, if (current) c.onAccent else c.onTonal)
+            v.setViewVisibility(R.id.row_check, if (current && data.state == 2) View.VISIBLE else View.GONE)
+            v.setInt(R.id.row_check, "setColorFilter", c.onAccent)
+            v.setContentDescription(R.id.row, context.getString(R.string.widget_connect_to, fav.name))
+            v.setOnClickFillInIntent(R.id.row, Intent().putExtra(WidgetActions.EXTRA_KEY, fav.key))
+            v
+        }
+    }
+
+    /** A pinned server's tap: the row fills in its key. Mutable for that. */
+    private fun connectTemplate(context: Context): PendingIntent = PendingIntent.getBroadcast(
+        context,
+        2,
+        Intent(context, WidgetActions::class.java).setAction(WidgetActions.CONNECT),
+        (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0) or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     /** The round power button, colored by the state. */
     private fun power(context: Context, v: RemoteViews, data: Data, button: Int, bg: Int, icon: Int) {
@@ -376,6 +401,16 @@ object Widgets {
         context,
         0,
         Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    /** The app on the list with the server in use (src/app.rs, show_in_use). */
+    private fun openServers(context: Context): PendingIntent = PendingIntent.getActivity(
+        context,
+        1,
+        Intent(context, MainActivity::class.java)
+            .setData(android.net.Uri.parse("duoray://servers"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
@@ -440,3 +475,33 @@ class StatusWidget : WidgetProvider(Widgets.Kind.STATUS)
 class DetailWidget : WidgetProvider(Widgets.Kind.DETAIL)
 
 class FavoritesWidget : WidgetProvider(Widgets.Kind.FAVORITES)
+
+/** The rows of «Избранное»: a list that scrolls inside the widget. */
+class FavoritesService : android.widget.RemoteViewsService() {
+    override fun onGetViewFactory(intent: Intent): RemoteViewsFactory = Factory(applicationContext)
+
+    private class Factory(private val context: Context) : RemoteViewsFactory {
+        private var rows: List<RemoteViews> = emptyList()
+
+        override fun onCreate() {}
+
+        override fun onDataSetChanged() {
+            rows = Widgets.favoriteRows(context)
+        }
+
+        override fun onDestroy() {}
+
+        override fun getCount() = rows.size
+
+        override fun getViewAt(position: Int): RemoteViews =
+            rows.getOrNull(position) ?: RemoteViews(context.packageName, R.layout.widget_favorite_row)
+
+        override fun getLoadingView(): RemoteViews? = null
+
+        override fun getViewTypeCount() = 1
+
+        override fun getItemId(position: Int) = position.toLong()
+
+        override fun hasStableIds() = false
+    }
+}

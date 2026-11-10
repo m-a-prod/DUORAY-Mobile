@@ -7,6 +7,9 @@
 
 pub const SCHEME: &str = "duoray://";
 
+/// The widget's «Серверы»: the list with the server in use.
+pub const SERVERS: &str = "duoray://servers";
+
 /// The subscription URL in a `duoray://` link; `None` for anything else.
 pub fn subscription(link: &str) -> Option<String> {
     let rest = link.trim().strip_prefix(SCHEME)?;

@@ -11,7 +11,7 @@ use duoray_core::balancer::{self, Trace};
 
 use crate::servers::bytes;
 use crate::service::Link;
-use crate::tunnel;
+use crate::grpc;
 
 const TRACE_URL: &str = "https://1.1.1.1/cdn-cgi/trace";
 
@@ -24,9 +24,13 @@ pub fn trace(link: &Link) -> Result<Trace> {
 }
 
 /// Bytes through the TUN inbound since xray started: (uplink, downlink).
-pub fn counters(xray: &Path, link: &Link) -> Result<(u64, u64)> {
-    let out = tunnel::api(xray, &["statsquery", &format!("--server={}", link.api), "-t", "2", "-pattern", "inbound>>>socks>>>traffic"])?;
-    Ok(balancer::parse_inbound_traffic(&out, "socks").unwrap_or((0, 0)))
+pub fn counters(link: &Link) -> Result<(u64, u64)> {
+    let socket = link.api.strip_prefix("unix://").context("xray api is not a socket file")?;
+    let names = ["inbound>>>socks>>>traffic>>>uplink", "inbound>>>socks>>>traffic>>>downlink"];
+    match grpc::get_stats(Path::new(socket), &names)?[..] {
+        [up, down] => Ok((up, down)),
+        _ => anyhow::bail!("xray api: no counters"),
+    }
 }
 
 /// Traffic of the session, from successive counter readings.

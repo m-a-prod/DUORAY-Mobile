@@ -324,15 +324,6 @@ mod light {
     }
 }
 
-/// `xray api <args>` against a running xray's API; its standard output.
-pub fn api(xray: &Path, args: &[&str]) -> Result<String> {
-    let out = xray_command(xray).arg("api").args(args).stdin(Stdio::null()).output().context("xray api")?;
-    if !out.status.success() {
-        bail!("xray api: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 /// Kills an xray left from a previous run of the app (the app process died
 /// but the child survived, which PR_SET_PDEATHSIG makes rare).
 pub fn kill_orphan(pid_file: &Path) {

@@ -937,7 +937,11 @@ impl App {
         st.set_conn_ping_text(ping.as_ref().map(|p| p.0.clone()).unwrap_or_default().into());
         st.set_conn_ping_level(ping.as_ref().map_or(0, |p| p.1));
 
-        // The same line for the notification and the Quick Settings tile.
+        // The same line for the notification and the Quick Settings tile,
+        // while the window is on screen (hidden, the poller has it).
+        if !crate::status::window_open() {
+            return;
+        }
         let exit = self.exit.as_ref().filter(|_| connected);
         let server_name = self.server_name(server.as_deref());
         let exit_line = exit.map(|t| crate::status::exit_line(&t.loc));
@@ -1123,8 +1127,19 @@ impl App {
     /// Once a second while connected: the traffic counters (and the exit
     /// country until it is known).
     fn poll(&mut self) {
-        self.trace_exit();
         self.ticks = self.ticks.wrapping_add(1);
+        // Hidden behind the home screen or a locked screen: nothing to show
+        // (the shade is the background poller's). Only «Держать подключение»
+        // keeps pinging, less often with the screen off.
+        if !crate::status::window_open() {
+            self.traffic = None;
+            let every = if crate::status::screen_on() { 5 } else { 15 };
+            if self.settings.keep_connected && self.settings.live_ping && self.ticks % every == 0 {
+                self.live_ping();
+            }
+            return;
+        }
+        self.trace_exit();
         if self.ticks % 5 == 0 && self.settings.live_ping {
             self.live_ping();
         }
@@ -1133,9 +1148,8 @@ impl App {
             return;
         }
         self.polling = true;
-        let xray = self.host.xray.clone();
         std::thread::spawn(move || {
-            let counters = exit::counters(&xray, &link);
+            let counters = exit::counters(&link);
             later(move |app| {
                 app.polling = false;
                 if let (Ok(c), true) = (counters, app.conn.link.as_ref() == Some(&link)) {
@@ -1617,7 +1631,9 @@ impl App {
             return self.stop_ping();
         }
         let Some(sub) = self.sub() else { return };
-        let jobs: Vec<(String, Server)> = sub.servers.iter().map(|s| (servers::key_of(sub, s), s.clone())).collect();
+        // In the order on screen: pinned servers first, then down the list.
+        let order: Vec<usize> = if self.order.len() == sub.servers.len() { self.order.clone() } else { (0..sub.servers.len()).collect() };
+        let jobs: Vec<(String, Server)> = order.iter().map(|&i| (servers::key_of(sub, &sub.servers[i]), sub.servers[i].clone())).collect();
         self.ping(jobs);
     }
 
@@ -1744,6 +1760,23 @@ impl App {
                 });
             }
             Err(e) => self.toast(format!("Не удалось добавить: {e:#}")),
+        }
+    }
+
+    /// The widget's «Серверы»: the list with the server in use (else the
+    /// chosen one), not whichever subscription was on screen last.
+    fn show_in_use(&mut self) {
+        let key = self.conn.server.clone().or_else(|| self.store.settings.last_server.clone());
+        let id = key.as_deref().and_then(|k| servers::find(&self.store, k)).map(|(sub, _)| sub.id.clone());
+        if let Some(ui) = self.ui() {
+            ui.set_server_open(false);
+            ui.set_apps_open(false);
+            ui.set_cores_open(false);
+            ui.set_page(0);
+        }
+        match id {
+            Some(id) => self.show(&id),
+            None => self.render_all(),
         }
     }
 
@@ -1933,6 +1966,10 @@ static PENDING_LINK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(No
 /// Opens the add sheet with the subscription from a `duoray://` link, now or
 /// as soon as the window is up (the link may come before it).
 pub fn open_link(link: &str) {
+    if link == crate::deeplink::SERVERS {
+        let _ = slint::invoke_from_event_loop(|| with_app(App::show_in_use));
+        return;
+    }
     let Some(url) = crate::deeplink::subscription(link) else { return };
     prefill(url);
 }

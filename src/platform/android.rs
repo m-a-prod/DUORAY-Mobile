@@ -378,6 +378,28 @@ pub extern "system" fn Java_space_dualizm_duoray_Native_batteryUnrestricted<'a>(
     .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `Native.visible(on)`: the window came on screen or went off it (the home
+/// screen, another app, a locked screen).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_visible<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, on: jboolean) {
+    env.with_env(|_env| -> jni::errors::Result<()> {
+        crate::status::set_visible(on);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `Native.screenOn(on)`: the screen came on or went off (Always On Display
+/// counts as off).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_screenOn<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, on: jboolean) {
+    env.with_env(|_env| -> jni::errors::Result<()> {
+        crate::status::set_screen_on(on);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `Native.windowInsets(top, bottom)`: a floating window's caption bar over
 /// its top, the taskbar or navigation bar over its bottom.
 #[unsafe(no_mangle)]

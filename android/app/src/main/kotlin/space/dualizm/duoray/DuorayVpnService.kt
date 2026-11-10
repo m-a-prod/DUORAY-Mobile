@@ -3,14 +3,17 @@ package space.dualizm.duoray
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
 import java.io.File
@@ -31,6 +34,19 @@ class DuorayVpnService : VpnService() {
         instance = this
         Native.boot(this)
         NetworkWatcher.start(applicationContext)
+        // With the screen off (Always On Display too) nobody sees the speeds:
+        // Rust stops reading them and updating the notification.
+        registerReceiver(screen, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        })
+        Native.screenOn(getSystemService(PowerManager::class.java).isInteractive)
+    }
+
+    private val screen = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Native.screenOn(intent.action == Intent.ACTION_SCREEN_ON)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -144,6 +160,7 @@ class DuorayVpnService : VpnService() {
     override fun onRevoke() = shutdown()
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(screen) }
         if (instance === this) instance = null
         val old = tun
         if (old != null || proxyUp) {

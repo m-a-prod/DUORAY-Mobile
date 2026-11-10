@@ -8,6 +8,7 @@ mod deeplink;
 mod diag;
 mod exit;
 mod flags;
+mod grpc;
 mod netpolicy;
 mod ping;
 mod platform;

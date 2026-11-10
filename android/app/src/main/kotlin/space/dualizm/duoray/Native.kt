@@ -112,6 +112,12 @@ object Native {
     /** Whether DUORAY may talk to the local network (Android 17 asks the user). */
     @JvmStatic external fun localNetwork(granted: Boolean)
 
+    /** The window came on screen (onStart) or went off it (onStop). */
+    @JvmStatic external fun visible(on: Boolean)
+
+    /** The screen came on or went off (Always On Display counts as off). */
+    @JvmStatic external fun screenOn(on: Boolean)
+
     /** A floating window's caption bar over its top and the bars over its bottom, in pixels. */
     @JvmStatic external fun windowInsets(top: Int, bottom: Int)
 

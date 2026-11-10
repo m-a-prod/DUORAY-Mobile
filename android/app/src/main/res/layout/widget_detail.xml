@@ -16,6 +16,7 @@
         android:src="@drawable/widget_shape" />
 
     <LinearLayout
+        android:id="@+id/content"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
@@ -29,6 +30,7 @@
             android:orientation="vertical">
 
             <LinearLayout
+                android:id="@+id/header"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
@@ -96,6 +98,7 @@
                 android:orientation="horizontal">
 
                 <FrameLayout
+                    android:id="@+id/flag_box"
                     android:layout_width="48dp"
                     android:layout_height="48dp">
 

@@ -252,6 +252,16 @@ class MainActivity : NativeActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        Native.visible(true)
+    }
+
+    override fun onStop() {
+        Native.visible(false)
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         reportWifiAccess()

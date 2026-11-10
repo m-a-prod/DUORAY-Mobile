@@ -139,6 +139,11 @@
         <receiver
             android:name=".WidgetActions"
             android:exported="false" />
+        <!-- The rows of «Избранное», scrolled inside the widget. -->
+        <service
+            android:name=".FavoritesService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
 
         <!-- Hands downloaded updates (files/updates) to the system installer. -->
         <provider
