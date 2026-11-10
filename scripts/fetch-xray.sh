@@ -2,7 +2,7 @@
 # Puts the newest stable Xray-core into the APK: the official Android
 # builds as lib/<abi>/libxray.so (Android runs executables only from an
 # app's native library directory) and their geo databases as assets.
-# XRAY_TAG=v26.10.31 pins a release instead of the latest one.
+# XRAY_TAG=v26.10.21 pins a release instead of the latest one.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -15,6 +15,24 @@ latest_tag() {
     echo "$tag"
 }
 
+# Releases not to ship, with the one to use instead: the same list as
+# DUORAY's packaging/latest.sh. 26.10.31 crashes in splithttp
+# (FillPacketRequest SIGSEGV, xhttp packet-up over TLS with extra settings);
+# 26.11.9 has no fix for it.
+XRAY_BROKEN="v26.10.31=v26.10.21 v26.11.9=v26.10.21"
+
+# latest_xray: the newest stable Xray-core release that is not broken.
+latest_xray() {
+    tag=$(latest_tag XTLS/Xray-core) || return 1
+    for pair in $XRAY_BROKEN; do
+        if [ "$tag" = "${pair%%=*}" ]; then
+            echo "xray $tag is known broken, using ${pair#*=}" >&2
+            tag=${pair#*=}
+        fi
+    done
+    echo "$tag"
+}
+
 # xray_sha256 TAG ZIP: SHA-256 of an Xray-core archive, from its .dgst file.
 xray_sha256() {
     sha=$(curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 20 "https://github.com/XTLS/Xray-core/releases/download/$1/$2.dgst" |
@@ -23,7 +41,7 @@ xray_sha256() {
     echo "$sha"
 }
 
-TAG=${XRAY_TAG:-$(latest_tag XTLS/Xray-core)}
+TAG=${XRAY_TAG:-$(latest_xray)}
 JNI=android/app/src/main/jniLibs
 ASSETS=android/app/src/main/assets/xray
 if [ -f "$JNI/.xray-$TAG" ]; then
