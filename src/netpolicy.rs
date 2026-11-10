@@ -90,6 +90,20 @@ impl NetworkPolicy {
         }
     }
 
+    /// The servers the rules name.
+    pub fn servers(&self) -> impl Iterator<Item = &String> {
+        self.wifi.iter().chain(&self.mobile).chain(self.ssids.iter().map(|r| &r.server))
+    }
+
+    /// The rules follow servers whose keys changed: old → new.
+    pub fn rename(&mut self, moved: &std::collections::HashMap<String, String>) {
+        for key in self.wifi.iter_mut().chain(self.mobile.iter_mut()).chain(self.ssids.iter_mut().map(|r| &mut r.server)) {
+            if let Some(new) = moved.get(key) {
+                key.clone_from(new);
+            }
+        }
+    }
+
     /// Drops rules whose server is gone (a subscription removed it).
     pub fn forget_missing(&mut self, exists: impl Fn(&str) -> bool) {
         if self.wifi.as_deref().is_some_and(|k| !exists(k)) {

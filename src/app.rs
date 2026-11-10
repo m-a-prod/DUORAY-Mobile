@@ -217,6 +217,8 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
     wire(&ui);
     ui.global::<AppState>().set_version(env!("CARGO_PKG_VERSION").into());
     with_app(|app| {
+        // Keys left from before a subscription update that moved servers.
+        app.follow_moved();
         app.apply_caption();
         app.apply_appearance();
         app.render_all();
@@ -1587,6 +1589,7 @@ impl App {
                 }
                 app.store.apply(&id, result);
                 app.save_store();
+                app.follow_moved();
                 app.forget_dead_rules();
                 app.render_all();
             });
@@ -1763,6 +1766,60 @@ impl App {
     }
 
     // ── Routing ────────────────────────────────────────────────
+
+    /// Servers the panel gave a new address or name keep what was set for
+    /// them: the remembered server, pins, the reserve, the exclusions,
+    /// network rules, pings and the connection in use follow the new keys.
+    fn follow_moved(&mut self) {
+        let settings = &self.settings;
+        let keys = self
+            .store
+            .settings
+            .last_server
+            .iter()
+            .chain(&self.store.settings.favorites)
+            .chain(&settings.reserve)
+            .chain(&settings.no_failover)
+            .chain(settings.policy.servers())
+            .chain(self.pings.keys())
+            .chain(&self.conn.server);
+        let moved = servers::moved_keys(&self.store, keys);
+        if moved.is_empty() {
+            return;
+        }
+        log::info!("servers moved: {}", moved.len());
+        service::rename(&moved);
+        self.conn = service::snapshot();
+        let follow = |list: &mut Vec<String>| {
+            let mut seen = HashSet::new();
+            list.retain_mut(|k| {
+                if let Some(new) = moved.get(k) {
+                    k.clone_from(new);
+                }
+                seen.insert(k.clone())
+            });
+        };
+        if let Some(k) = self.store.settings.last_server.as_mut()
+            && let Some(new) = moved.get(k)
+        {
+            k.clone_from(new);
+        }
+        follow(&mut self.store.settings.favorites);
+        follow(&mut self.settings.reserve);
+        follow(&mut self.settings.no_failover);
+        for (old, new) in &moved {
+            if let Some(ping) = self.pings.remove(old) {
+                self.pings.entry(new.clone()).or_insert(ping);
+            }
+        }
+        self.save_store();
+        self.save_pings();
+        if self.settings.policy.servers().any(|k| moved.contains_key(k)) {
+            self.edit_policy(|p| p.rename(&moved));
+        } else {
+            self.save_settings();
+        }
+    }
 
     fn forget_dead_rules(&mut self) {
         let store = &self.store;

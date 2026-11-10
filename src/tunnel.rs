@@ -35,6 +35,9 @@ pub struct Xray {
 /// How xray ended when nobody asked it to.
 pub struct Exit {
     pub ran_for: Duration,
+    /// "exit status: 2", "signal: 9 (SIGKILL)": a signal means something
+    /// outside killed it (the system's memory or battery manager).
+    pub status: String,
     pub log_tail: String,
 }
 
@@ -137,14 +140,40 @@ fn spawn_with(paths: &Paths, child_fd: Option<RawFd>, on_exit: impl FnOnce(Exit)
     let (stop_flag, exit_flag, log_path, pid_path) = (stopping.clone(), exited.clone(), paths.log.clone(), paths.pid.clone());
     let started = Instant::now();
     std::thread::Builder::new().name("xray-waiter".into()).spawn(move || {
-        let _ = child.wait();
+        let status = child.wait().map_or_else(|e| e.to_string(), |s| s.to_string());
         exit_flag.store(true, Ordering::SeqCst);
         let _ = std::fs::remove_file(&pid_path);
         if !stop_flag.load(Ordering::SeqCst) {
-            on_exit(Exit { ran_for: started.elapsed(), log_tail: log_tail(&log_path, 12) });
+            on_exit(Exit { ran_for: started.elapsed(), status, log_tail: log_tail(&log_path, 12) });
         }
     })?;
     Ok(Xray { pid, stopping, exited })
+}
+
+/// Kills our child processes that run `config` (xrays nothing tracks any
+/// more). Returns how many.
+pub fn kill_strays(config: &Path) -> usize {
+    use std::os::unix::ffi::OsStrExt;
+    let me = std::process::id().to_string();
+    let want = config.as_os_str().as_bytes();
+    let Ok(dir) = std::fs::read_dir("/proc") else { return 0 };
+    let mut killed = 0;
+    for entry in dir.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<libc::pid_t>().ok()) else { continue };
+        // "pid (comm) state ppid …": comm may hold spaces and parentheses.
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else { continue };
+        let ppid = stat.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().nth(1));
+        if ppid != Some(me.as_str()) {
+            continue;
+        }
+        let Ok(cmdline) = std::fs::read(entry.path().join("cmdline")) else { continue };
+        if cmdline.split(|b| *b == 0).any(|arg| arg == want) {
+            // SAFETY: our own child; its waiter thread reaps it.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            killed += 1;
+        }
+    }
+    killed
 }
 
 /// Starts a throwaway xray without a TUN (pings go through one); the caller
@@ -403,6 +432,22 @@ mod spawner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strays_running_the_config_are_killed() {
+        use std::os::unix::process::ExitStatusExt;
+        let config = std::env::temp_dir().join(format!("duoray-stray-{}/xray.json", std::process::id()));
+        let other = config.with_file_name("ping-0.json");
+        // `; true` keeps sh from exec'ing sleep, so the path stays in its arguments.
+        let run = |path: &Path| Command::new("sh").args(["-c", "sleep 30; true"]).arg(path).spawn().unwrap();
+        let (mut stray, mut ping) = (run(&config), run(&other));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(kill_strays(&config), 1);
+        assert_eq!(stray.wait().unwrap().signal(), Some(libc::SIGKILL));
+        assert!(ping.try_wait().unwrap().is_none(), "another config's xray stays");
+        ping.kill().unwrap();
+        let _ = ping.wait();
+    }
 
     #[test]
     fn stale_api_sockets_go_before_xray_starts() {

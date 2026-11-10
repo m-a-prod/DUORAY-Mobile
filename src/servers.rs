@@ -14,6 +14,31 @@ pub fn find<'a>(store: &'a Store, key: &str) -> Option<(&'a Subscription, &'a Se
         .subscriptions
         .iter()
         .find_map(|sub| sub.servers.iter().find(|s| key_of(sub, s) == key).map(|s| (sub, s)))
+        .or_else(|| moved(store, key))
+}
+
+/// The server `key` was made for after the panel changed its address (a
+/// bridge moved to a new IP) or its name: the only server of the same
+/// subscription with that name, else the only one at that address.
+fn moved<'a>(store: &'a Store, key: &str) -> Option<(&'a Subscription, &'a Server)> {
+    let mut parts = key.split('\u{1f}');
+    let (id, name, endpoint) = (parts.next()?, parts.next()?, parts.next()?);
+    let sub = store.get(id)?;
+    let only = |hit: &dyn Fn(&Server) -> bool| {
+        let mut found = sub.servers.iter().filter(|s| hit(s));
+        match (found.next(), found.next()) {
+            (Some(s), None) => Some(s),
+            _ => None,
+        }
+    };
+    only(&|s| s.name == name).or_else(|| only(&|s| format!("{}:{}", s.address, s.port) == endpoint)).map(|s| (sub, s))
+}
+
+/// Old keys whose servers now go by another one (see [`find`]): old → new.
+pub fn moved_keys<'a>(store: &Store, keys: impl IntoIterator<Item = &'a String>) -> std::collections::HashMap<String, String> {
+    keys.into_iter()
+        .filter_map(|k| find(store, k).map(|(sub, s)| key_of(sub, s)).filter(|new| new != k).map(|new| (k.clone(), new)))
+        .collect()
 }
 
 /// The name a server is shown under (its flag goes to an image instead).
@@ -145,6 +170,36 @@ mod tests {
         let sub = Subscription { url: "https://vip.dualizm.space/sub/x".into(), ..Default::default() };
         assert!(is_dualizm(&sub));
         assert_eq!(renew_url(&sub).as_deref(), Some(BUY_URL));
+    }
+
+    #[test]
+    fn a_server_the_panel_moved_is_still_found() {
+        use duoray_core::server::Source;
+        let server = |name: &str, address: &str| Server {
+            name: name.into(),
+            description: None,
+            protocol: "VLESS".into(),
+            address: address.into(),
+            port: 443,
+            network: "tcp".into(),
+            security: "tls".into(),
+            proxies: 1,
+            source: Source::Json(serde_json::json!({})),
+            override_key: None,
+        };
+        let sub = |servers| Subscription { id: "s".into(), servers, ..Default::default() };
+        let before = sub(vec![server("Мост", "192.0.2.1"), server("Финляндия", "192.0.2.2"), server("LTE 1", "192.0.2.9"), server("LTE 2", "192.0.2.9")]);
+        let keys: Vec<String> = before.servers.iter().map(|s| key_of(&before, s)).collect();
+        // The bridge got a new address, Финляндия a new name, the LTE pair both.
+        let after = sub(vec![server("Мост", "198.51.100.1"), server("Финляндия #1", "192.0.2.2"), server("LTE 1 (1x)", "192.0.2.9"), server("LTE 2 (1x)", "192.0.2.9")]);
+        let store = Store { subscriptions: vec![after], ..Default::default() };
+        assert_eq!(find(&store, &keys[0]).map(|(_, s)| s.address.as_str()), Some("198.51.100.1"));
+        assert_eq!(find(&store, &keys[1]).map(|(_, s)| s.name.as_str()), Some("Финляндия #1"));
+        assert!(find(&store, &keys[2]).is_none(), "two servers at that address: no guess");
+        assert!(find(&store, "other\u{1f}Мост\u{1f}192.0.2.1:443").is_none(), "only within its subscription");
+        let moved = moved_keys(&store, &keys);
+        assert_eq!(moved.len(), 2);
+        assert_eq!(moved[&keys[0]], key_of(&store.subscriptions[0], &store.subscriptions[0].servers[0]));
     }
 
     #[test]

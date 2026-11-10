@@ -173,6 +173,10 @@ struct Service {
     net: NetworkEnv,
     tun: Option<RawFd>,
     xray: Option<Xray>,
+    /// The attempt and TUN the running xray was launched for.
+    launched: Option<(u64, RawFd)>,
+    /// When xray was started again after dying mid-connection.
+    restarts: Vec<Instant>,
     /// A server picked by hand on this network: it beats the network rule
     /// until the network changes, as in MaterialXray.
     manual: Option<String>,
@@ -280,6 +284,19 @@ pub fn set_kill_switch(on: bool) {
     KILL_SWITCH.store(on, Ordering::Relaxed);
 }
 
+/// Marks a connection turned on in mobile data. A file: when Android
+/// restarts the app the VPN stays but memory goes, and «Отключать на Wi-Fi»
+/// then left a connection made on mobile data running at home.
+const CONNECTED_ON_MOBILE: &str = "connected-on-mobile";
+
+fn set_connected_on(s: &mut Service, kind: Option<NetKind>) {
+    s.connected_on = kind;
+    if let Some(host) = &s.host {
+        let mark = host.run_dir().join(CONNECTED_ON_MOBILE);
+        let _ = if kind == Some(NetKind::Mobile) { std::fs::write(&mark, "") } else { std::fs::remove_file(&mark) };
+    }
+}
+
 /// Called by the shell before anything else. Only the first call in a
 /// process cleans up after a previous one; later calls (a re-created
 /// window) just refresh what the shell reports.
@@ -289,6 +306,7 @@ pub fn init(host: Host) {
         crate::diag::init(&host.data, &format!("{} {}", host.os, host.os_version), &host.model);
         let paths = host.paths();
         let _ = std::fs::create_dir_all(host.run_dir());
+        s.connected_on = host.run_dir().join(CONNECTED_ON_MOBILE).exists().then_some(NetKind::Mobile);
         tunnel::kill_orphan(&paths.pid);
         tunnel::kill_orphan_pings(&host.run_dir());
         let settings = MobileSettings::load(&host.settings());
@@ -376,7 +394,8 @@ pub fn rebuild_tun() {
 pub fn connect(chosen: Option<String>) {
     let key = {
         let mut s = lock();
-        s.connected_on = Some(s.online.kind);
+        let kind = s.online.kind;
+        set_connected_on(&mut s, Some(kind));
         s.target().map(String::from).or(chosen)
     };
     match key {
@@ -396,6 +415,23 @@ pub fn pick(key: &str) -> bool {
     let ruled = s.policy.server_for(&s.net).is_some_and(|k| k != key);
     s.manual = ruled.then(|| key.to_string());
     ruled
+}
+
+/// A subscription update gave servers new keys (old → new): the one in use
+/// and the hand pick follow them without reconnecting.
+pub fn rename(moved: &std::collections::HashMap<String, String>) {
+    let mut s = lock();
+    let mut changed = false;
+    let Service { server, manual, .. } = &mut *s;
+    for key in server.iter_mut().chain(manual.iter_mut()) {
+        if let Some(new) = moved.get(key) {
+            key.clone_from(new);
+            changed = true;
+        }
+    }
+    if changed {
+        s.notify();
+    }
 }
 
 /// The server the current network uses when connecting: a hand pick here,
@@ -471,12 +507,13 @@ pub fn set_tunnel_mode(vpn_changed: bool) {
 pub fn disconnect() {
     let platform = {
         let mut s = lock();
-        s.connected_on = None;
+        set_connected_on(&mut s, None);
         s.attempt += 1;
         s.status = Status::Off;
         if let Some(x) = s.xray.take() {
             x.stop();
         }
+        kill_strays(&s);
         s.notify();
         s.platform.clone()
     };
@@ -524,14 +561,25 @@ fn start(key: String, why: &str) {
     });
 }
 
+/// One launch at a time: a reconnect and the TUN it rebuilt both launched
+/// for the same attempt, each started an xray, and the one overwritten kept
+/// running with the proxy's port after «Отключить».
+static LAUNCHING: Mutex<()> = Mutex::new(());
+
 /// (Re)starts xray on the open TUN. Runs on a worker thread: stopping the
 /// old xray waits for it to let go of the TUN.
 fn launch(attempt: u64) {
+    let _one = LAUNCHING.lock().unwrap_or_else(|e| e.into_inner());
     let (old, host, tun) = {
         let mut s = lock();
         if s.attempt != attempt {
             return;
         }
+        // Already running for this attempt on this TUN.
+        if s.xray.is_some() && s.tun.is_some_and(|fd| s.launched == Some((attempt, fd))) {
+            return;
+        }
+        s.launched = None;
         (s.xray.take(), s.host.clone(), s.tun)
     };
     if let Some(old) = old {
@@ -555,7 +603,10 @@ fn launch(attempt: u64) {
     match result {
         Ok(x) => {
             crate::diag::log("connected");
-            s.xray = x;
+            if let Some(stray) = std::mem::replace(&mut s.xray, x) {
+                stray.stop();
+            }
+            s.launched = Some((attempt, fd));
             s.status = Status::On;
             s.notify();
         }
@@ -592,7 +643,7 @@ fn on_xray_exit(attempt: u64, exit: tunnel::Exit) {
             });
             return;
         }
-        let mut message = format!("xray остановился через {} с", exit.ran_for.as_secs());
+        let mut message = format!("xray остановился через {} с ({})", exit.ran_for.as_secs(), exit.status);
         // The line that says why, not xray's banner.
         let reason = exit.log_tail.lines().rev().find(|l| l.contains("Failed to start") || l.contains("[Error]"));
         match reason {
@@ -612,6 +663,19 @@ fn on_xray_exit(attempt: u64, exit: tunnel::Exit) {
             }
             None => {}
         }
+        // Killed mid-connection (a HONOR phone's manager ended it after
+        // eight minutes, nothing in its log): started again and the VPN
+        // stays, as on the desktop. One that keeps dying gives up after
+        // three restarts in ten minutes.
+        s.restarts.retain(|t| t.elapsed() < Duration::from_secs(600));
+        if exit.ran_for >= Duration::from_secs(3) && s.tun.is_some() && s.restarts.len() < 3 {
+            s.restarts.push(Instant::now());
+            crate::diag::log("xray stopped, starting it again");
+            crate::diag::auto("xray_restarted", &message);
+            drop(s);
+            std::thread::spawn(move || launch(attempt));
+            return;
+        }
         s.fail("tunnel_stopped", message)
     };
     if let Some(p) = platform {
@@ -624,6 +688,18 @@ fn busy_port(line: &str) -> Option<u16> {
     let at = line.find("address already in use")?;
     let before = line[..at].trim_end_matches([' ', ':']).trim_end_matches("bind").trim_end_matches([' ', ':']);
     before[before.rfind(':')? + 1..].parse().ok()
+}
+
+/// Nothing of ours may keep running the connection's config (and its proxy
+/// port) once it ends, whatever lost track of it.
+fn kill_strays(s: &Service) {
+    if let Some(host) = &s.host {
+        let killed = tunnel::kill_strays(&host.paths().config);
+        if killed > 0 {
+            log::warn!("killed {killed} stray xray");
+            crate::diag::log(format!("killed {killed} stray xray"));
+        }
+    }
 }
 
 /// The platform opened the TUN. Returns false when there is nothing to run
@@ -681,6 +757,7 @@ pub fn on_tun_down() {
     if let Some(x) = s.xray.take() {
         x.stop();
     }
+    kill_strays(&s);
     if !matches!(s.status, Status::Failed(_)) {
         s.status = Status::Off;
     }
@@ -741,14 +818,15 @@ pub fn on_network(net: NetworkEnv) {
         let left_wifi = s.online.kind == NetKind::Wifi && net.kind == NetKind::Mobile;
         // Back on Wi-Fi: a connection made on mobile data ends («Отключать на
         // Wi-Fi»); one turned on by hand on Wi-Fi stays.
-        let back_on_wifi = s.online.kind == NetKind::Mobile && net.kind == NetKind::Wifi;
+        // (From nothing known yet too: Android restarted the app at home.)
+        let back_on_wifi = s.online.kind != NetKind::Wifi && net.kind == NetKind::Wifi;
         let auto = CONNECT_OFF_WIFI.load(Ordering::Relaxed);
         s.online = net;
         // A new network: its rule counts again.
         s.manual = None;
         let on = s.active() || (matches!(s.status, Status::Failed(_)) && s.tun.is_some());
         if left_wifi && auto && s.status == Status::Off {
-            s.connected_on = Some(NetKind::Mobile);
+            set_connected_on(&mut s, Some(NetKind::Mobile));
             let last = s.host.as_ref().and_then(|h| Store::load(&h.store()).ok()).and_then(|st| st.settings.last_server);
             s.target().map(String::from).or(last).map(|key| Next::Start(key, "left Wi-Fi"))
         } else if back_on_wifi && auto && DISCONNECT_ON_WIFI.load(Ordering::Relaxed) && on && s.connected_on == Some(NetKind::Mobile) {
