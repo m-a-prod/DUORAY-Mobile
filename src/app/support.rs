@@ -213,13 +213,15 @@ impl App {
         self.set_update_info("Проверка обновлений…");
         self.show_update();
         let proxy = self.conn.link.as_ref().map(service::Link::proxy_url);
+        let tunnelled = proxy.is_some();
         std::thread::spawn(move || {
             let found = update::check(proxy.as_deref()).map_err(|e| format!("{e:#}"));
-            later(move |app| app.update_checked(found, manual));
+            later(move |app| app.update_checked(found, manual, tunnelled));
         });
     }
 
-    fn update_checked(&mut self, found: Result<Option<Found>, String>, manual: bool) {
+    /// `tunnelled`: the check had the tunnel to go through.
+    fn update_checked(&mut self, found: Result<Option<Found>, String>, manual: bool, tunnelled: bool) {
         self.update_failed = found.is_err();
         match found {
             Ok(None) => {
@@ -249,6 +251,12 @@ impl App {
                     ""
                 };
                 self.set_update_info(&format!("Не удалось проверить обновления: {e}.{hint}"));
+                // The VPN came up while this check was on its way around it
+                // (a blocked hub takes a minute to give up): once more,
+                // through the tunnel.
+                if !tunnelled && self.conn.link.is_some() {
+                    return self.check_update(manual);
+                }
             }
         }
         self.show_update();
