@@ -80,6 +80,8 @@ struct App {
     update: UpdateState,
     /// When updates were last looked for without being asked (unix seconds).
     update_checked_at: u64,
+    /// The last check did not reach a hub.
+    update_failed: bool,
     cores: cores::Cores,
     toast_timer: slint::Timer,
     poll_timer: slint::Timer,
@@ -155,6 +157,12 @@ fn later(f: impl FnOnce(&mut App) + Send + 'static) {
     let _ = slint::invoke_from_event_loop(move || with_app(f));
 }
 
+/// A word from outside the window (a widget's tap that led nowhere), for
+/// the window if it is open.
+pub fn say(message: String) {
+    later(move |app| app.toast(message));
+}
+
 /// A server chosen outside the window (a home screen widget): the open
 /// window keeps it as its selection, so its next save does not undo it.
 pub fn adopt_selection(key: String) {
@@ -217,6 +225,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         apps_filter: String::new(),
         update: UpdateState::default(),
         update_checked_at: 0,
+        update_failed: false,
         cores: cores::Cores::default(),
         toast_timer: slint::Timer::default(),
         poll_timer: slint::Timer::default(),
@@ -1117,11 +1126,17 @@ impl App {
             self.trace_exit();
         }
         if came_up {
-            // A subscription the network would not give directly (its host
-            // is blocked without the VPN) may come through the tunnel: the
-            // ones that failed are asked for again, once xray has settled.
+            // What the network would not give directly (the panel or the
+            // update hub blocked without the VPN, as on mobile data) may
+            // come through the tunnel: subscriptions that failed and a
+            // failed update check are tried again, once xray has settled.
             self.refresh_tried.clear();
-            slint::Timer::single_shot(Duration::from_secs(3), || with_app(|app| app.refresh_stale()));
+            slint::Timer::single_shot(Duration::from_secs(3), || {
+                with_app(|app| {
+                    app.refresh_stale();
+                    app.check_update_after_connect();
+                })
+            });
         }
         self.render_servers();
         self.render_connection();

@@ -191,6 +191,15 @@ impl App {
         }
     }
 
+    /// Connected: a check that did not reach a hub is made again, now
+    /// through the tunnel. Without it people on mobile data, where the hubs
+    /// are blocked, were never offered a new version.
+    pub(super) fn check_update_after_connect(&mut self) {
+        if self.update_failed {
+            self.check_update(false);
+        }
+    }
+
     /// Asks the hub for a newer version. `manual`: the user pressed
     /// "Проверить обновления" (runs with automatic checks off, downloads on
     /// mobile data too).
@@ -211,6 +220,7 @@ impl App {
     }
 
     fn update_checked(&mut self, found: Result<Option<Found>, String>, manual: bool) {
+        self.update_failed = found.is_err();
         match found {
             Ok(None) => {
                 self.update = UpdateState::Idle;
@@ -232,7 +242,13 @@ impl App {
                 // Offline just then, most likely: not another 6 hours.
                 self.update_checked_at = store::now().saturating_sub((CHECK_EVERY - RETRY_AFTER).as_secs());
                 diag::log(format!("update check failed: {e}"));
-                self.set_update_info(&format!("Не удалось проверить обновления: {e}"));
+                // On mobile data the hubs are often out of reach without the VPN.
+                let hint = if self.conn.link.is_none() {
+                    " Без VPN сервер обновлений в этой сети может быть недоступен: после подключения проверка повторится сама."
+                } else {
+                    ""
+                };
+                self.set_update_info(&format!("Не удалось проверить обновления: {e}.{hint}"));
             }
         }
         self.show_update();

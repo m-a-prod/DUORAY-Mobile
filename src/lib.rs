@@ -57,8 +57,20 @@ pub fn toggle() {
 /// the list (over the network's rule) and connected to, or switched to.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub fn connect_to(key: String) {
-    if let Some(host) = service::host()
-        && let Ok(mut store) = duoray_core::store::Store::load(&host.store())
+    let stored = service::host().and_then(|host| duoray_core::store::Store::load(&host.store()).ok().map(|store| (host, store)));
+    // A widget drawn before a subscription update may still hold a server
+    // that has left the subscription. Nothing to connect to: it used to fail
+    // with «Сервер больше не найден в подписках» and leave the dead server
+    // as the selection. The widgets are drawn again from what is there now.
+    if stored.as_ref().is_some_and(|(_, store)| servers::find(store, &key).is_none()) {
+        diag::log("widget: its server is no longer in a subscription");
+        if let Some(p) = service::platform() {
+            p.refresh_widgets();
+        }
+        app::say("Этого сервера больше нет в подписке".into());
+        return;
+    }
+    if let Some((host, mut store)) = stored
         && store.settings.last_server.as_deref() != Some(key.as_str())
     {
         store.settings.last_server = Some(key.clone());
