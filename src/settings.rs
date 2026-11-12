@@ -60,6 +60,10 @@ pub struct MobileSettings {
     /// The proxy of «VPN + прокси» and «Прокси»; «Доступ через хотспот»
     /// opens it to the Wi-Fi or hotspot.
     pub share: ShareProxy,
+    /// «Скачивать и по мобильной сети»: a new version downloads by itself
+    /// without Wi-Fi too. Off: on mobile data the banner offers it and the
+    /// download waits for a tap.
+    pub update_on_mobile: bool,
 }
 
 /// What the connection gives the phone.
@@ -107,6 +111,10 @@ impl TunnelMode {
 
 /// SOCKS5 here, HTTP on the next port.
 pub const DEFAULT_PROXY_PORT: u16 = 10818;
+
+/// «Переключать через»: no less than two missed pings, 5 s apart. With one,
+/// a single lost request moved people between servers all day.
+pub const MIN_FAILOVER_SECS: u32 = 10;
 
 /// SOCKS5 on `port` and HTTP on `port + 1`: on 127.0.0.1 for the phone's
 /// apps, or on every interface so devices on the same Wi-Fi or on the
@@ -156,6 +164,7 @@ impl Default for MobileSettings {
             kill_switch: false,
             tunnel: TunnelMode::Vpn,
             share: ShareProxy::default(),
+            update_on_mobile: false,
         }
     }
 }
@@ -229,6 +238,7 @@ impl MobileSettings {
         let raw: Option<serde_json::Value> = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok());
         let mut s: Self = raw.as_ref().and_then(|v| Self::deserialize(v).ok()).unwrap_or_default();
         s.apps.migrate();
+        s.failover_secs = s.failover_secs.max(MIN_FAILOVER_SECS);
         // Before «Режим работы» the hotspot proxy ran next to the VPN.
         if s.share.enabled && raw.is_some_and(|v| v.get("tunnel").is_none()) {
             s.tunnel = TunnelMode::VpnProxy;
@@ -275,6 +285,18 @@ mod tests {
         let saved = serde_json::to_value(&rules).unwrap();
         assert!(saved.get("packages").is_none());
         assert_eq!(new_password().len(), 12);
+    }
+
+    #[test]
+    fn a_five_second_failover_of_old_files_becomes_ten() {
+        let dir = std::env::temp_dir().join(format!("duoray-failover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mobile.json");
+        std::fs::write(&path, r#"{"failover_secs": 5}"#).unwrap();
+        assert_eq!(MobileSettings::load(&path).failover_secs, MIN_FAILOVER_SECS);
+        std::fs::write(&path, r#"{"failover_secs": 30}"#).unwrap();
+        assert_eq!(MobileSettings::load(&path).failover_secs, 30);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

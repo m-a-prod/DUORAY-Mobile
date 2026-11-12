@@ -64,6 +64,11 @@ struct App {
     /// The server open in the editor: (subscription id, server index).
     editing: Option<(String, usize)>,
     refreshing: HashSet<String>,
+    /// When each subscription was last updated without being asked (unix
+    /// seconds): one that fails is not asked for again at once.
+    refresh_tried: HashMap<String, u64>,
+    /// The network the pings were measured on (pings-net next to pings.json).
+    pings_net: Option<NetKind>,
     conn: Snapshot,
     traffic: Option<Traffic>,
     exit: Option<Trace>,
@@ -73,6 +78,8 @@ struct App {
     apps: Vec<AppInfo>,
     apps_filter: String,
     update: UpdateState,
+    /// When updates were last looked for without being asked (unix seconds).
+    update_checked_at: u64,
     cores: cores::Cores,
     toast_timer: slint::Timer,
     poll_timer: slint::Timer,
@@ -199,6 +206,8 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         ping_cancel: None,
         render_pending: false,
         refreshing: HashSet::new(),
+        refresh_tried: HashMap::new(),
+        pings_net: load_pings_net(&host),
         conn: service::snapshot(),
         traffic: None,
         exit: None,
@@ -207,6 +216,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         apps: Vec::new(),
         apps_filter: String::new(),
         update: UpdateState::default(),
+        update_checked_at: 0,
         cores: cores::Cores::default(),
         toast_timer: slint::Timer::default(),
         poll_timer: slint::Timer::default(),
@@ -219,6 +229,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
     with_app(|app| {
         // Keys left from before a subscription update that moved servers.
         app.follow_moved();
+        app.pings_follow_network();
         app.apply_caption();
         app.apply_appearance();
         app.render_all();
@@ -270,6 +281,7 @@ fn wire(ui: &AppWindow) {
     a.on_consent(|agree| with_app(|app| app.set_consent(agree)));
     a.on_set_telemetry(|on| with_app(|app| app.set_consent(on)));
     a.on_set_auto_update(|on| with_app(|app| app.edit_settings(|s| s.auto_update = on)));
+    a.on_set_update_on_mobile(|on| with_app(|app| app.set_update_on_mobile(on)));
     a.on_check_update(|| with_app(|app| app.check_update(true)));
     a.on_update_clicked(|| with_app(App::update_clicked));
     a.on_report_problem(|| with_app(App::open_report));
@@ -457,7 +469,7 @@ fn wire(ui: &AppWindow) {
     });
     a.on_set_failover_secs(|v| {
         with_app(|app| {
-            app.settings.failover_secs = v.clamp(5, 120) as u32;
+            app.settings.failover_secs = v.clamp(crate::settings::MIN_FAILOVER_SECS as i32, 120) as u32;
             app.save_settings();
             app.render_settings();
         })
@@ -790,6 +802,10 @@ impl App {
         st.set_has_sub(self.sub().is_some());
         let Some(sub) = self.sub() else { return };
         let (usage_text, fraction) = servers::usage(sub);
+        let (left, until, term) = servers::term(sub, store::now()).unwrap_or((String::new(), String::new(), servers::Term::Fine));
+        st.set_term_left(left.into());
+        st.set_term_until(until.into());
+        st.set_term_state(term.code());
         st.set_header_title(sub.display_name().into());
         st.set_header_meta(servers::header_meta(sub).into());
         st.set_header_short(servers::header_short(sub).into());
@@ -1051,6 +1067,7 @@ impl App {
         st.set_keep_connected(self.settings.keep_connected);
         st.set_telemetry(self.store.settings.telemetry == Some(true));
         st.set_auto_update(self.store.settings.auto_update);
+        st.set_update_on_mobile(self.settings.update_on_mobile);
     }
 
     fn render_apps(&self) {
@@ -1087,15 +1104,24 @@ impl App {
     fn on_connection(&mut self, snapshot: Snapshot) {
         let new_link = snapshot.link != self.conn.link;
         let server_changed = snapshot.server != self.conn.server;
+        let came_up = self.conn.link.is_none() && snapshot.link.is_some();
         if new_link {
             crate::diag::set_proxy(snapshot.link.as_ref().map(service::Link::proxy_url));
         }
         self.conn = snapshot;
+        self.pings_follow_network();
         if new_link || server_changed {
             self.traffic = None;
             self.exit = None;
             self.traced = None;
             self.trace_exit();
+        }
+        if came_up {
+            // A subscription the network would not give directly (its host
+            // is blocked without the VPN) may come through the tunnel: the
+            // ones that failed are asked for again, once xray has settled.
+            self.refresh_tried.clear();
+            slint::Timer::single_shot(Duration::from_secs(3), || with_app(|app| app.refresh_stale()));
         }
         self.render_servers();
         self.render_connection();
@@ -1138,6 +1164,12 @@ impl App {
                 self.live_ping();
             }
             return;
+        }
+        self.check_update_if_due();
+        // «Автообновление — 1 ч» while the window is on screen, not only at
+        // start: the days left and the traffic are a renewal behind otherwise.
+        if self.ticks.is_multiple_of(60) && self.editing.is_none() {
+            self.refresh_stale();
         }
         self.trace_exit();
         if self.ticks % 5 == 0 && self.settings.live_ping {
@@ -1193,8 +1225,9 @@ impl App {
                 }
                 app.render_servers();
                 app.render_connection();
-                // Pings go every 5 s: the setting in seconds, in misses.
-                let allowed = app.settings.failover_secs.div_ceil(5).max(1);
+                // Pings go every 5 s: the setting in seconds, in misses. Two
+                // at the least: one lost request is not a silent server.
+                let allowed = app.settings.failover_secs.div_ceil(5).max(2);
                 let quiet = app.failover_quiet_until.is_some_and(|t| Instant::now() < t);
                 if app.live_failures >= allowed && app.settings.keep_connected && !app.failover_busy && !quiet {
                     app.live_failures = 0;
@@ -1273,9 +1306,9 @@ impl App {
     /// Where «Держать подключение» may move from the silent server `key`,
     /// best first: the reserve if there is one; else the server this network
     /// is set to (a hand pick or the rule's auto-select), then the others of
-    /// its subscription by the last ping (unmeasured next; on Wi-Fi the ones
-    /// made for mobile whitelists, "LTE", last). Never the excluded ones,
-    /// the ones already tried or whose last ping failed.
+    /// its subscription. Either way by the last ping, unmeasured next, and on
+    /// Wi-Fi the ones made for mobile whitelists, "LTE", last. Never the
+    /// excluded ones, the ones already tried or whose last ping failed.
     fn failover_candidates(&self, key: &str) -> Vec<String> {
         let usable = |k: &String| {
             k != key && !self.failover_tried.contains(k) && !self.settings.no_failover.contains(k) && !matches!(self.pings.get(k), Some(Err(_)))
@@ -1285,18 +1318,25 @@ impl App {
             list.sort_by_key(|(i, k, last)| (*last, ping::sort_key(self.pings.get(k)), *i));
             list.into_iter().map(|(_, k, _)| k).collect::<Vec<_>>()
         };
+        // On Wi-Fi the servers made for mobile whitelists are the last resort.
+        let wifi = self.conn.net.kind == NetKind::Wifi;
+        let for_mobile = |name: &str| wifi && name.to_lowercase().contains("lte");
         let reserve: Vec<String> = self.reserve_keys().into_iter().filter(|k| k != key).collect();
         if !reserve.is_empty() {
-            return by_ping(reserve.into_iter().enumerate().map(|(i, k)| (i, k, false)).collect());
+            let last = |k: &str| servers::find(&self.store, k).is_some_and(|(_, s)| for_mobile(&s.name));
+            let reserve = reserve.into_iter().enumerate().map(|(i, k)| {
+                let last = last(&k);
+                (i, k, last)
+            });
+            return by_ping(reserve.collect());
         }
         let mut out: Vec<String> = service::network_target().filter(|t| usable(t)).into_iter().collect();
         let Some(sub) = self.store.subscriptions.iter().find(|s| s.servers.iter().any(|x| servers::key_of(s, x) == key)) else { return out };
-        let wifi = self.conn.net.kind == NetKind::Wifi;
         let rest = sub
             .servers
             .iter()
             .enumerate()
-            .map(|(i, s)| (i, servers::key_of(sub, s), wifi && s.name.to_lowercase().contains("lte")))
+            .map(|(i, s)| (i, servers::key_of(sub, s), for_mobile(&s.name)))
             .collect();
         for k in by_ping(rest) {
             if !out.contains(&k) {
@@ -1610,19 +1650,35 @@ impl App {
         });
     }
 
-    /// Subscriptions whose update interval has passed.
+    /// Subscriptions whose update interval has passed (one that failed
+    /// waits a while before the next try).
     fn refresh_stale(&mut self) {
         let now = store::now();
-        let stale: Vec<String> = self
-            .store
-            .subscriptions
-            .iter()
-            .filter(|s| !s.is_manual() && s.updated_at.is_none_or(|t| now.saturating_sub(t) >= servers::update_interval_secs(s)))
-            .map(|s| s.id.clone())
-            .collect();
-        for id in stale {
+        for id in servers::due_for_update(&self.store.subscriptions, &self.refresh_tried, now) {
+            self.refresh_tried.insert(id.clone(), now);
             self.refresh(id);
         }
+    }
+
+    /// A server that did not answer on another network may answer on this
+    /// one: mobile whitelists block what Wi-Fi reaches. Its failure is
+    /// forgotten when the network changes; otherwise «Держать подключение»,
+    /// back on Wi-Fi, had only the "LTE" servers left to move to.
+    fn pings_follow_network(&mut self) {
+        let kind = self.conn.net.kind;
+        if !matches!(kind, NetKind::Wifi | NetKind::Mobile) || self.pings_net == Some(kind) {
+            return;
+        }
+        if self.pings_net.is_some() {
+            let before = self.pings.len();
+            self.pings.retain(|_, result| result.is_ok());
+            if self.pings.len() != before {
+                self.save_pings();
+                self.render_servers();
+            }
+        }
+        self.pings_net = Some(kind);
+        let _ = std::fs::write(self.host.data.join("pings-net"), format!("{kind:?}"));
     }
 
     /// The ping button: starts the check, or stops one under way.
@@ -2008,6 +2064,14 @@ fn load_pings(host: &Host) -> HashMap<String, PingResult> {
     let Ok(text) = std::fs::read_to_string(host.data.join("pings.json")) else { return HashMap::new() };
     let saved: HashMap<String, Option<u64>> = serde_json::from_str(&text).unwrap_or_default();
     saved.into_iter().map(|(k, ms)| (k, ms.map(Duration::from_millis).ok_or_else(|| "нет ответа".to_string()))).collect()
+}
+
+fn load_pings_net(host: &Host) -> Option<NetKind> {
+    match std::fs::read_to_string(host.data.join("pings-net")).ok()?.trim() {
+        "Wifi" => Some(NetKind::Wifi),
+        "Mobile" => Some(NetKind::Mobile),
+        _ => None,
+    }
 }
 
 /// An app icon from the PNG the platform saved, decoded once.

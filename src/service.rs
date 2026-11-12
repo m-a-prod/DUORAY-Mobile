@@ -230,12 +230,40 @@ impl Service {
         self.manual.as_deref().or_else(|| self.policy.server_for(&self.net))
     }
 
-    /// The server the current network asks for, when that is not the one in use.
-    fn wanted_switch(&self) -> Option<String> {
-        let target = self.target()?;
-        (self.active() && self.tun.is_some() && self.server.as_deref() != Some(target)).then(|| target.to_string())
+    /// [`Self::target`] if `alive` still knows it. A rule or a hand pick
+    /// outlives its server when the panel takes it out of the subscription:
+    /// then the network asks for nothing (and the dead pick is dropped),
+    /// instead of «Сервер больше не найден в подписках» at every connect
+    /// and every change of network.
+    fn living_target(&mut self, alive: impl Fn(&str) -> bool) -> Option<String> {
+        if self.manual.as_deref().is_some_and(|k| !alive(k)) {
+            self.manual = None;
+        }
+        self.target().filter(|k| alive(k)).map(String::from)
     }
+}
 
+/// [`Service::living_target`] by the subscriptions on disk.
+fn living_target(s: &mut Service) -> Option<String> {
+    s.target()?;
+    let store = s.host.as_ref().and_then(|h| Store::load(&h.store()).ok())?;
+    let target = s.living_target(|k| servers::find(&store, k).is_some());
+    if target.is_none() {
+        crate::diag::log("the network's server is no longer in a subscription: ignored");
+    }
+    target
+}
+
+/// The server the current network asks for, when that is not the one in use.
+fn wanted_switch(s: &mut Service) -> Option<String> {
+    if !(s.active() && s.tun.is_some()) {
+        return None;
+    }
+    let target = living_target(s)?;
+    (s.server.as_deref() != Some(target.as_str())).then_some(target)
+}
+
+impl Service {
     /// Records the failure, reports it (`kind`, with consent) and stops
     /// xray; the caller then closes the VPN.
     fn fail(&mut self, kind: &str, message: String) -> Option<Arc<dyn Platform>> {
@@ -356,7 +384,7 @@ pub fn set_policy(policy: NetworkPolicy) {
     let switch = {
         let mut s = lock();
         s.policy = policy;
-        s.wanted_switch()
+        wanted_switch(&mut s)
     };
     if let Some(key) = switch {
         start(key, "app rules");
@@ -396,7 +424,7 @@ pub fn connect(chosen: Option<String>) {
         let mut s = lock();
         let kind = s.online.kind;
         set_connected_on(&mut s, Some(kind));
-        s.target().map(String::from).or(chosen)
+        living_target(&mut s).or(chosen)
     };
     match key {
         Some(key) => start(key, "connect"),
@@ -717,7 +745,7 @@ pub fn on_tun_up(fd: RawFd) -> bool {
             let key = s
                 .server
                 .clone()
-                .or_else(|| s.target().map(String::from))
+                .or_else(|| living_target(&mut s))
                 .or_else(|| Store::load(&host.store()).ok().and_then(|st| st.settings.last_server));
             match key.map(|key| (write_config(&host, &key), key)) {
                 Some((Ok(link), key)) => {
@@ -828,11 +856,11 @@ pub fn on_network(net: NetworkEnv) {
         if left_wifi && auto && s.status == Status::Off {
             set_connected_on(&mut s, Some(NetKind::Mobile));
             let last = s.host.as_ref().and_then(|h| Store::load(&h.store()).ok()).and_then(|st| st.settings.last_server);
-            s.target().map(String::from).or(last).map(|key| Next::Start(key, "left Wi-Fi"))
+            living_target(&mut s).or(last).map(|key| Next::Start(key, "left Wi-Fi"))
         } else if back_on_wifi && auto && DISCONNECT_ON_WIFI.load(Ordering::Relaxed) && on && s.connected_on == Some(NetKind::Mobile) {
             Some(Next::Stop)
         } else {
-            s.wanted_switch().map(|key| Next::Start(key, "network rule"))
+            wanted_switch(&mut s).map(|key| Next::Start(key, "network rule"))
         }
     };
     match next {
@@ -973,6 +1001,26 @@ pub fn mobile_config(mut config: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rule_for_a_server_that_left_the_subscription_asks_for_nothing() {
+        let alive = |k: &str| k == "here";
+        let mut s = Service {
+            net: NetworkEnv { kind: NetKind::Wifi, ssid: None },
+            policy: NetworkPolicy { enabled: true, wifi: Some("gone".into()), ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(s.living_target(alive), None);
+        // A hand pick that is gone is dropped: the rule behind it counts again.
+        s.policy.wifi = Some("here".into());
+        s.manual = Some("gone".into());
+        assert_eq!(s.living_target(alive).as_deref(), Some("here"));
+        assert_eq!(s.manual, None);
+        // A living hand pick still beats the rule.
+        s.manual = Some("here".into());
+        s.policy.wifi = Some("gone".into());
+        assert_eq!(s.living_target(alive).as_deref(), Some("here"));
+    }
 
     #[test]
     fn a_busy_proxy_port_is_named() {

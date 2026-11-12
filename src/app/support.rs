@@ -1,11 +1,13 @@
 //! Consent to error reports, "Сообщить о проблеме" and in-app updates: the
-//! desktop's support_ui.rs. An update downloads by itself on Wi-Fi only; on
-//! mobile data the banner offers it and the user starts the download.
+//! desktop's support_ui.rs. Updates are looked for on any network. One
+//! downloads by itself on Wi-Fi; on mobile data the banner offers it and the
+//! user starts the download, unless «Скачивать и по мобильной сети» is on.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use duoray_core::store;
 use serde_json::json;
 use slint::ComponentHandle;
 
@@ -29,9 +31,18 @@ pub(super) enum UpdateState {
     Ready(Found, PathBuf),
 }
 
+/// Whether a version just found downloads without being asked for: on Wi-Fi
+/// always, elsewhere (mobile data, a tethered phone's Bluetooth) only with
+/// «Скачивать и по мобильной сети». An APK is about 35 MB.
+fn downloads_ahead(net: NetKind, on_mobile: bool) -> bool {
+    net == NetKind::Wifi || on_mobile
+}
+
 /// First check a little after start, then every 6 hours.
 const FIRST_CHECK: Duration = Duration::from_secs(30);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
+/// A check that failed (no network just then) is tried again sooner.
+const RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 
 impl App {
     /// At start: consent (asked once), queued reports, update checks.
@@ -44,6 +55,8 @@ impl App {
         }
         self.update_diag_context();
         self.show_update();
+        // The first check is the timer's, not check_update_if_due's.
+        self.update_checked_at = store::now();
         slint::Timer::single_shot(FIRST_CHECK, || with_app(|app| app.check_update(false)));
         self.update_timer.start(slint::TimerMode::Repeated, CHECK_EVERY, || {
             with_app(|app| app.check_update(false));
@@ -163,6 +176,21 @@ impl App {
 
     // ── Updates ────────────────────────────────────────────────
 
+    /// The automatic check once 6 hours have passed by the clock on the
+    /// wall, asked for while the window is on screen. The timer of
+    /// start_support counts only the time the phone is awake: with the app
+    /// left open for days its 6 hours took far longer, and a new version
+    /// was not offered to people who had it open in front of them.
+    pub(super) fn check_update_if_due(&mut self) {
+        let now = store::now();
+        // The clock was set back: count from here.
+        self.update_checked_at = self.update_checked_at.min(now);
+        if now - self.update_checked_at >= CHECK_EVERY.as_secs() {
+            self.update_checked_at = now;
+            self.check_update(false);
+        }
+    }
+
     /// Asks the hub for a newer version. `manual`: the user pressed
     /// "Проверить обновления" (runs with automatic checks off, downloads on
     /// mobile data too).
@@ -171,6 +199,7 @@ impl App {
         if busy || (!manual && !self.store.settings.auto_update) || matches!(self.update, UpdateState::Ready(..)) {
             return;
         }
+        self.update_checked_at = store::now();
         self.update = UpdateState::Checking;
         self.set_update_info("Проверка обновлений…");
         self.show_update();
@@ -190,9 +219,9 @@ impl App {
             Ok(Some(f)) => {
                 diag::log(format!("update {} found", f.version));
                 self.set_update_info(&format!("Доступна версия {}.", f.version));
-                // On Wi-Fi it downloads ahead; the banner installs on a tap.
-                let wifi = self.conn.net.kind == NetKind::Wifi;
-                if manual || wifi {
+                // On Wi-Fi it downloads ahead, on mobile data only if the
+                // user said so; the banner installs on a tap.
+                if manual || downloads_ahead(self.conn.net.kind, self.settings.update_on_mobile) {
                     self.download_update(f, false);
                     return;
                 }
@@ -200,11 +229,27 @@ impl App {
             }
             Err(e) => {
                 self.update = UpdateState::Idle;
+                // Offline just then, most likely: not another 6 hours.
+                self.update_checked_at = store::now().saturating_sub((CHECK_EVERY - RETRY_AFTER).as_secs());
                 diag::log(format!("update check failed: {e}"));
                 self.set_update_info(&format!("Не удалось проверить обновления: {e}"));
             }
         }
         self.show_update();
+    }
+
+    /// «Скачивать и по мобильной сети». Turned on with a version already
+    /// offered by the banner, it starts that download.
+    pub(super) fn set_update_on_mobile(&mut self, on: bool) {
+        self.settings.update_on_mobile = on;
+        self.save_settings();
+        self.render_settings();
+        if on
+            && matches!(self.update, UpdateState::Found(_))
+            && let UpdateState::Found(found) = std::mem::take(&mut self.update)
+        {
+            self.download_update(found, false);
+        }
     }
 
     /// `install`: the user tapped the banner, so the installer opens as soon
@@ -295,5 +340,18 @@ impl App {
         st.set_update_banner(if detail.is_empty() { "".into() } else { "Доступно обновление".into() });
         st.set_update_detail(detail.into());
         st.set_update_progress(progress);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_update_downloads_by_itself_on_wifi_and_elsewhere_only_when_allowed() {
+        assert!(downloads_ahead(NetKind::Wifi, false));
+        assert!(!downloads_ahead(NetKind::Mobile, false));
+        assert!(!downloads_ahead(NetKind::Other, false));
+        assert!(downloads_ahead(NetKind::Mobile, true));
     }
 }

@@ -159,6 +159,11 @@ export global AppState {
     in property <bool> show-usage-row;
     in property <string> usage-text;
     in property <float> usage-fraction: -1;
+    // Next to the traffic: "Осталось 27 дней" over "до 09.12.2026" (both
+    // empty when the panel names no end); 0 fine, 1 ends within days, 2 ended.
+    in property <string> term-left;
+    in property <string> term-until;
+    in property <int> term-state;
     in property <string> announce;
     in property <bool> announce-hidden;
     in property <bool> has-web-page;
@@ -248,6 +253,7 @@ export global AppState {
     // Error reports and updates.
     in property <bool> telemetry;
     in property <bool> auto-update;
+    in property <bool> update-on-mobile;
     in property <string> update-info;
     in property <string> update-banner;
     in property <string> update-detail;
@@ -382,6 +388,7 @@ export global Actions {
     callback consent(bool);
     callback set-telemetry(bool);
     callback set-auto-update(bool);
+    callback set-update-on-mobile(bool);
     callback check-update();
     callback update-clicked();
     callback report-problem();
@@ -1030,6 +1037,7 @@ component HeaderCard inherits Card {
             }
             Rectangle {
                 horizontal-stretch: 1;
+                min-width: 64px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
                 if AppState.usage-fraction > 0: Rectangle {
@@ -1043,12 +1051,51 @@ component HeaderCard inherits Card {
                     border-width: 1px;
                     border-color: Theme.line;
                 }
-                Text {
+                // The text at its full size, to tell whether it fits. Placed
+                // by hand (x): the bar must not take its width for a minimum.
+                usage-full := Text {
+                    x: 0px;
+                    visible: false;
                     text: AppState.usage-text;
                     font-size: Theme.fs-caption;
                     font-weight: 700;
+                }
+                // Next to the subscription's end the bar is short: on a
+                // narrow screen or with large text the numbers get smaller
+                // before they are cut (a little to spare: small letters are
+                // not exactly that much narrower).
+                Text {
+                    x: 6px;
+                    width: parent.width - 12px;
+                    text: AppState.usage-text;
+                    font-size: Theme.fs-caption * clamp(0.96 * self.width / max(1px, usage-full.preferred-width), 0.7, 1);
+                    font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            // To the right of the traffic, where Happ has «Expires:
+            // 09.12.2026»: what is left of the subscription (amber in the
+            // days of the reminder, red once it has ended) over the day.
+            if AppState.term-left != "" || AppState.term-until != "": VerticalLayout {
+                horizontal-stretch: 0;
+                alignment: center;
+                padding-left: 6px;
+                padding-right: 2px;
+                spacing: 0px;
+                if AppState.term-left != "": Text {
+                    text: AppState.term-left;
+                    font-size: Theme.fs-caption - 1px;
+                    font-weight: 600;
+                    color: AppState.term-state == 2 ? Theme.danger : AppState.term-state == 1 ? Theme.warn : Palette.foreground;
+                    overflow: elide;
+                }
+                if AppState.term-until != "": Text {
+                    text: AppState.term-until;
+                    font-size: Theme.fs-caption - 1px;
+                    color: Theme.muted;
+                    overflow: elide;
                 }
             }
             VerticalLayout {
@@ -2534,10 +2581,18 @@ component SettingsPage inherits Rectangle {
                         }
                         ToggleRow {
                             title: "Проверять обновления";
-                            hint: "Новая версия скачивается по Wi-Fi и проверяется по цифровой подписи. Устанавливается только по вашему нажатию.";
+                            hint: "В любой сети: по Wi-Fi и по мобильной. Новая версия скачивается сама по Wi-Fi и проверяется по цифровой подписи. Устанавливается только по вашему нажатию.";
                             checked: AppState.auto-update;
                             toggled(on) => {
                                 Actions.set-auto-update(on);
+                            }
+                        }
+                        if AppState.auto-update: ToggleRow {
+                            title: "Скачивать и по мобильной сети";
+                            hint: "Обновление, около 35 МБ, скачивается само и без Wi-Fi. Выключено: без Wi-Fi о новой версии сообщит баннер над списком серверов, загрузка начнётся по нажатию.";
+                            checked: AppState.update-on-mobile;
+                            toggled(on) => {
+                                Actions.set-update-on-mobile(on);
                             }
                         }
                         HorizontalLayout {

@@ -95,19 +95,87 @@ pub fn card_meta(sub: &Subscription) -> String {
     }
 }
 
-/// "86.0 ГБ / ∞" or "12.4 ГБ / 100.0 ГБ" and the used share (negative when
-/// the plan is unlimited).
+/// "86 ГБ / ∞" or "12.4 / 100 ГБ" and the used share (negative when the
+/// plan is unlimited). Short, since the bar shares its row with the
+/// subscription's end: whole numbers go without ".0", and a unit both
+/// numbers have is written once.
 pub fn usage(sub: &Subscription) -> (String, f32) {
-    let used = sub.info.download.unwrap_or(0) + sub.info.upload.unwrap_or(0);
-    match sub.info.total {
-        Some(total) if total > 0 => (format!("{} / {}", bytes(used), bytes(total)), used as f32 / total as f32),
-        _ => (format!("{} / ∞", bytes(used)), -1.0),
+    let short = |b: u64| bytes(b).replace(".0 ", " ");
+    let used = short(sub.info.download.unwrap_or(0) + sub.info.upload.unwrap_or(0));
+    let Some(total) = sub.info.total.filter(|t| *t > 0) else {
+        return (format!("{used} / ∞"), -1.0);
+    };
+    let share = (sub.info.download.unwrap_or(0) + sub.info.upload.unwrap_or(0)) as f32 / total as f32;
+    let total = short(total);
+    match (used.rsplit_once(' '), total.rsplit_once(' ')) {
+        (Some((number, unit)), Some((_, same))) if unit == same => (format!("{number} / {total}"), share),
+        _ => (format!("{used} / {total}"), share),
     }
+}
+
+/// How close the end of a subscription is: the colour of its words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Term {
+    Fine,
+    /// The days of the reminder (EXPIRY_AHEAD).
+    Soon,
+    Ended,
+}
+
+impl Term {
+    pub fn code(self) -> i32 {
+        self as i32
+    }
+}
+
+/// What stands to the right of the traffic bar, where Happ has «Expires:
+/// 09.12.2026»: what is left of the subscription and the day it ends,
+/// ("Осталось 27 дней", "до 09.12.2026"). People looked for it next to the
+/// traffic and did not find the drawer's card. Days are the calendar's, as
+/// the reminder counts them; more than a year away, the day alone. A panel
+/// that names no end (`expire=0`) gets nothing, as in Happ.
+pub fn term(sub: &Subscription, now: u64) -> Option<(String, String, Term)> {
+    use chrono::TimeZone;
+    let end = sub.info.expire.filter(|e| *e > 0)?;
+    if end <= now {
+        return Some(("Истекла".into(), date(end), Term::Ended));
+    }
+    let until = format!("до {}", date(end));
+    let local = |t: u64| chrono::Local.timestamp_opt(t as i64, 0).single();
+    let (Some(ends), Some(today)) = (local(end), local(now)) else {
+        return Some((String::new(), until, Term::Fine));
+    };
+    Some(match (ends.date_naive() - today.date_naive()).num_days() {
+        ..=0 => ("Истекает сегодня".into(), format!("в {}", ends.format("%H:%M")), Term::Soon),
+        days @ 1..=365 => {
+            let n = days as usize;
+            // "Остался 21 день", "Осталось 22 дня".
+            let left = if n % 10 == 1 && n % 100 != 11 { "Остался" } else { "Осталось" };
+            let state = if days as u64 * 86400 <= EXPIRY_AHEAD { Term::Soon } else { Term::Fine };
+            (format!("{left} {}", plural(n, "день", "дня", "дней")), until, state)
+        }
+        _ => (String::new(), until, Term::Fine),
+    })
 }
 
 /// The panel's `profile-update-interval`, or 12 h.
 pub fn update_interval_secs(sub: &Subscription) -> u64 {
     u64::from(sub.info.update_interval_hours.filter(|h| *h > 0).unwrap_or(12)) * 3600
+}
+
+/// An update that failed is not asked for again sooner than this.
+const UPDATE_RETRY: u64 = 10 * 60;
+
+/// The subscriptions to update now without being asked: the panel's
+/// interval has passed since the last update, and the last try (`tried`,
+/// unix seconds by id) is not a moment ago: a failed one keeps its old time
+/// of update and would be fetched in a loop.
+pub fn due_for_update(subs: &[Subscription], tried: &std::collections::HashMap<String, u64>, now: u64) -> Vec<String> {
+    subs.iter()
+        .filter(|s| !s.is_manual() && s.updated_at.is_none_or(|t| now.saturating_sub(t) >= update_interval_secs(s)))
+        .filter(|s| tried.get(&s.id).is_none_or(|t| now.saturating_sub(*t) >= UPDATE_RETRY))
+        .map(|s| s.id.clone())
+        .collect()
 }
 
 pub fn plural(n: usize, one: &str, few: &str, many: &str) -> String {
@@ -200,6 +268,62 @@ mod tests {
         let moved = moved_keys(&store, &keys);
         assert_eq!(moved.len(), 2);
         assert_eq!(moved[&keys[0]], key_of(&store.subscriptions[0], &store.subscriptions[0].servers[0]));
+    }
+
+    #[test]
+    fn the_time_left_stands_next_to_the_traffic() {
+        use chrono::TimeZone;
+        use duoray_core::subscription::SubInfo;
+        let sub = |expire| Subscription { info: SubInfo { download: Some(3 << 30), expire, ..Default::default() }, ..Default::default() };
+        // Noon of the phone's own day: the days are the calendar's.
+        let noon = |d: u32| chrono::Local.with_ymd_and_hms(2026, 11, d, 12, 0, 0).unwrap().timestamp() as u64;
+        let (now, end) = (noon(2), noon(29));
+        let said = |expire, now| term(&sub(expire), now).map(|(left, until, state)| (format!("{left} | {until}"), state));
+        assert_eq!(said(Some(end), now), Some(("Осталось 27 дней | до 29.11.2026".into(), Term::Fine)));
+        assert_eq!(said(Some(end), noon(8)), Some(("Остался 21 день | до 29.11.2026".into(), Term::Fine)));
+        assert_eq!(said(Some(end), noon(7)), Some(("Осталось 22 дня | до 29.11.2026".into(), Term::Fine)));
+        assert_eq!(said(Some(end), noon(26)), Some(("Осталось 3 дня | до 29.11.2026".into(), Term::Soon)));
+        // Tomorrow morning is a day away, though not 24 hours.
+        assert_eq!(said(Some(end - 5 * 3600), noon(28)), Some(("Остался 1 день | до 29.11.2026".into(), Term::Soon)));
+        assert_eq!(said(Some(end + 3600), end), Some(("Истекает сегодня | в 13:00".into(), Term::Soon)));
+        assert_eq!(said(Some(end), end), Some(("Истекла | 29.11.2026".into(), Term::Ended)));
+        // Years ahead: the day says it, a count of days would not.
+        assert_eq!(said(Some(end + 400 * 86400), now), Some((format!(" | до {}", date(end + 400 * 86400)), Term::Fine)));
+        // The panel's «no end», and a plain list of links.
+        assert_eq!(term(&sub(Some(0)), now), None);
+        assert_eq!(term(&Subscription::default(), now), None);
+    }
+
+    #[test]
+    fn traffic_in_the_bar() {
+        use duoray_core::subscription::SubInfo;
+        let sub = |upload, download, total| Subscription { info: SubInfo { upload, download, total, ..Default::default() }, ..Default::default() };
+        assert_eq!(usage(&sub(None, Some(214_405_837_087), None)), ("199.7 ГБ / ∞".into(), -1.0));
+        assert_eq!(usage(&sub(Some(1 << 30), Some(5 << 30), Some(300 << 30))), ("6 / 300 ГБ".into(), 0.02));
+        assert_eq!(usage(&sub(None, Some(5_798_205_849), Some(300 << 30))).0, "5.4 / 300 ГБ");
+        assert_eq!(usage(&sub(None, Some(512 << 20), Some(300 << 30))).0, "512 МБ / 300 ГБ");
+        assert_eq!(usage(&Subscription::default()).0, "0 Б / ∞");
+    }
+
+    #[test]
+    fn stale_subscriptions_are_updated_and_failed_ones_not_in_a_loop() {
+        use duoray_core::subscription::SubInfo;
+        let now = 1_800_000_000;
+        let sub = |id: &str, updated_at, hours| Subscription {
+            id: id.into(),
+            url: "https://sub.example.com/x".into(),
+            updated_at,
+            info: SubInfo { update_interval_hours: hours, ..Default::default() },
+            ..Default::default()
+        };
+        let subs = [sub("hourly", Some(now - 3700), Some(1)), sub("fresh", Some(now - 600), Some(1)), sub("new", None, None), sub("daily", Some(now - 3700), None)];
+        let mut tried = std::collections::HashMap::new();
+        assert_eq!(due_for_update(&subs, &tried, now), ["hourly", "new"]);
+        // The hourly one failed just now: its time of update did not move.
+        tried.insert("hourly".to_string(), now - 60);
+        assert_eq!(due_for_update(&subs, &tried, now), ["new"]);
+        tried.insert("hourly".to_string(), now - UPDATE_RETRY);
+        assert_eq!(due_for_update(&subs, &tried, now), ["hourly", "new"]);
     }
 
     #[test]
