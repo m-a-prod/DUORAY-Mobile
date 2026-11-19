@@ -451,12 +451,12 @@ component PingChip inherits Rectangle {
     property <color> tone: root.level == 1 ? Theme.ok : root.level == 2 ? Theme.warn : root.level == 3 || root.level == 4 ? Theme.danger : Theme.muted;
     border-radius: 6px;
     height: 22px;
-    min-width: 44px;
+    min-width: 56px;
     horizontal-stretch: 0;
     background: root.tone.with-alpha(0.14);
     HorizontalLayout {
-        padding-left: 3px;
-        padding-right: 3px;
+        padding-left: 8px;
+        padding-right: 8px;
         alignment: center;
         // Being measured: three dots, still. A spinner would keep the window
         // redrawing at full rate for the whole check.
@@ -834,8 +834,8 @@ component ServerItem inherits Rectangle {
             alignment: center;
             if root.server.has-flag: Image {
                 source: root.server.flag;
-                width: 21px;
-                height: 21px;
+                width: 30px;
+                height: 30px;
                 image-fit: contain;
             }
             if !root.server.has-flag: Badge {
@@ -900,7 +900,7 @@ component ServerItem inherits Rectangle {
             PingChip {
                 text: root.server.ping-text;
                 level: root.server.ping-level;
-                width: 48px * Theme.text-scale;
+                width: 62px * Theme.text-scale;
             }
         }
         if root.radio: Rectangle {
@@ -969,6 +969,15 @@ component HeaderCard inherits Card {
                     }
                 }
             }
+            if AppState.has-ping-results: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.sort;
+                    highlighted: AppState.sort-by-ping;
+                    label: AppState.sort-by-ping ? "Вернуть порядок подписки" : "Сортировать по пингу";
+                    clicked => { Actions.toggle-sort(); }
+                }
+            }
             VerticalLayout {
                 alignment: center;
                 // While a check runs it stops it.
@@ -1000,22 +1009,13 @@ component HeaderCard inherits Card {
                 }
             }
         }
-        if root.show-title || AppState.has-ping-results: HorizontalLayout {
+        if root.show-title: HorizontalLayout {
             padding-right: 10px;
-            if root.show-title: Text {
+            Text {
                 text: AppState.header-short;
                 font-size: Theme.fs-caption;
                 color: Theme.muted;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
                 overflow: elide;
-            }
-            if AppState.has-ping-results: Button {
-                text: "По пингу";
-                primary: AppState.sort-by-ping;
-                horizontal-stretch: 0;
-                height: 32px;
-                clicked => { Actions.toggle-sort(); }
             }
         }
         if AppState.show-usage-row: HorizontalLayout {
