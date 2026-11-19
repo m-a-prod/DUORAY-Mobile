@@ -23,7 +23,7 @@ android {
         // With -PabiSplit=true the split below picks the ABIs instead.
         if (findProperty("abiSplit") != "true") {
             ndk {
-                abiFilters += listOf("arm64-v8a", "x86_64")
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
             }
         }
     }
@@ -62,7 +62,7 @@ android {
         abi {
             isEnable = findProperty("abiSplit") == "true"
             reset()
-            include("arm64-v8a", "x86_64")
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
             isUniversalApk = false
         }
     }

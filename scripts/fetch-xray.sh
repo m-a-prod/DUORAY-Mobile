@@ -44,11 +44,12 @@ xray_sha256() {
 TAG=${XRAY_TAG:-$(latest_xray)}
 JNI=android/app/src/main/jniLibs
 ASSETS=android/app/src/main/assets/xray
-if [ -f "$JNI/.xray-$TAG" ]; then
+if [ -f "$JNI/.xray-$TAG" ] && [ -x "$JNI/armeabi-v7a/libxray.so" ]; then
     echo "xray $TAG already in place"
     exit 0
 fi
 
+rm -f "$JNI"/.xray-*
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 for pair in arm64-v8a:arm64-v8a x86_64:amd64; do
@@ -61,8 +62,17 @@ for pair in arm64-v8a:arm64-v8a x86_64:amd64; do
     unzip -q -o "$tmp/$zip" -d "$tmp/$abi"
     install -m 755 "$tmp/$abi/xray" "$JNI/$abi/libxray.so"
 done
+# Upstream publishes Android binaries only for arm64 and amd64.
+git clone --quiet --depth 1 --branch "$TAG" https://github.com/XTLS/Xray-core.git "$tmp/source"
+set -- "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/armv7a-linux-androideabi26-clang
+(
+    cd "$tmp/source"
+    CGO_ENABLED=1 GOOS=android GOARCH=arm GOARM=7 CC="$1" go build -trimpath -buildvcs=false \
+        -ldflags="-s -w -checklinkname=0" -o "$tmp/xray-armv7" ./main
+)
+mkdir -p "$JNI/armeabi-v7a"
+install -m 755 "$tmp/xray-armv7" "$JNI/armeabi-v7a/libxray.so"
 mkdir -p "$ASSETS"
 cp "$tmp/arm64-v8a/geoip.dat" "$tmp/arm64-v8a/geosite.dat" "$ASSETS/"
-rm -f "$JNI"/.xray-*
 touch "$JNI/.xray-$TAG"
 echo "xray $TAG in place"

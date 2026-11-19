@@ -269,6 +269,10 @@ impl Service {
     fn fail(&mut self, kind: &str, message: String) -> Option<Arc<dyn Platform>> {
         log::warn!("connection failed: {message}");
         crate::diag::auto(kind, &message);
+        self.stop_failed(message)
+    }
+
+    fn stop_failed(&mut self, message: String) -> Option<Arc<dyn Platform>> {
         self.attempt += 1;
         self.status = Status::Failed(message);
         if let Some(x) = self.xray.take() {
@@ -279,14 +283,15 @@ impl Service {
         // network instead of going around the VPN. Only «Отключить» ends it.
         if KILL_SWITCH.load(Ordering::Relaxed) && self.tun.is_some_and(|fd| fd != NO_TUN) {
             // Tries again every few seconds until it works or «Отключить».
-            let (attempt, key) = (self.attempt, self.server.clone());
+            let attempt = self.attempt;
+            let key = self.server.clone()?;
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(5));
                 let again = {
                     let s = lock();
                     s.attempt == attempt && matches!(s.status, Status::Failed(_)) && s.tun.is_some()
                 };
-                if let (true, Some(key)) = (again, key) {
+                if again {
                     start(key, "kill switch retry");
                 }
             });
@@ -567,9 +572,20 @@ fn start(key: String, why: &str) {
         if s.attempt != attempt {
             return;
         }
-        let prepared = prepared.map(|link| s.link = Some(link));
-        if let Err(e) = prepared {
-            let platform = s.fail("connect_failed", format!("{e:#}"));
+        let platform = match prepared {
+            Ok(Some((key, link))) => {
+                s.server = Some(key);
+                s.link = Some(link);
+                None
+            }
+            Ok(None) => {
+                s.server = None;
+                s.link = None;
+                Some(s.stop_failed("Выберите сервер: прежнего больше нет в подписке".into()))
+            }
+            Err(e) => Some(s.fail("connect_failed", format!("{e:#}"))),
+        };
+        if let Some(platform) = platform {
             drop(s);
             if let Some(p) = platform {
                 p.stop_vpn();
@@ -747,11 +763,12 @@ pub fn on_tun_up(fd: RawFd) -> bool {
                 .clone()
                 .or_else(|| living_target(&mut s))
                 .or_else(|| Store::load(&host.store()).ok().and_then(|st| st.settings.last_server));
-            match key.map(|key| (write_config(&host, &key), key)) {
-                Some((Ok(link), key)) => {
+            match key.map(|key| write_config(&host, &key)) {
+                Some(Ok(Some((key, link)))) => {
                     s.link = Some(link);
                     s.server = Some(key);
                 }
+                Some(Ok(None)) => return false,
                 // The config of the last run, if there is one.
                 _ if host.paths().config.exists() => {}
                 _ => return false,
@@ -873,9 +890,11 @@ pub fn on_network(net: NetworkEnv) {
     }
 }
 
-fn write_config(host: &Host, key: &str) -> Result<Link> {
+fn write_config(host: &Host, key: &str) -> Result<Option<(String, Link)>> {
     let store = Store::load(&host.store()).context("store.json")?;
-    let (_, server) = servers::find(&store, key).context("Сервер больше не найден в подписках")?;
+    let Some((sub, server)) = servers::for_connection(&store, key) else {
+        return Ok(None);
+    };
     let geo = GeoData::load(Some(&host.geo_assets()), Some(&host.geo().lists()));
     let routing = runtime::Routing { settings: &store.settings.routing, geo: &geo };
     let rt = runtime::build(server, "", Some(routing))?;
@@ -903,7 +922,7 @@ fn write_config(host: &Host, key: &str) -> Result<Link> {
     let link = Link { socks: rt.socks, user: rt.user, pass: rt.pass, api, balancer: balancer::main_balancer(&config) };
     let paths = host.paths();
     std::fs::write(&paths.config, serde_json::to_vec_pretty(&config)?).context("xray.json")?;
-    Ok(link)
+    Ok(Some((servers::key_of(sub, server), link)))
 }
 
 /// Inbound the app's own requests (subscription updates, exit check) use.

@@ -247,7 +247,8 @@ fn poll(link: Link, server: String, key: String) {
         if let Ok(counts) = exit::counters(&link) {
             traffic = Some(Traffic::read(traffic.as_ref(), Instant::now(), counts));
         }
-        if exit.is_none() && traced.is_none_or(|t| t.elapsed() >= Duration::from_secs(15)) {
+        let interval = if exit.is_some() { exit::REFRESH_INTERVAL } else { Duration::from_secs(15) };
+        if traced.is_none_or(|t| t.elapsed() >= interval) {
             traced = Some(Instant::now());
             if let Ok(t) = exit::trace(&link) {
                 exit = Some(exit_line(&t.loc));

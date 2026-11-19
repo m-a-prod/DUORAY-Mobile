@@ -11,6 +11,7 @@ use crate::netpolicy::NetworkPolicy;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MobileSettings {
+    pub sort_by_ping: bool,
     pub policy: NetworkPolicy,
     pub apps: AppRules,
     /// Speeds and the exit country in the notification while the app is
@@ -160,6 +161,7 @@ impl Default for MobileSettings {
             connect_off_wifi: false,
             disconnect_on_wifi: false,
             keep_connected: false,
+            sort_by_ping: false,
             live_ping: true,
             kill_switch: false,
             tunnel: TunnelMode::Vpn,
@@ -265,6 +267,7 @@ mod tests {
         assert_eq!(MobileSettings::load(&path), MobileSettings::default());
         let mut s = MobileSettings::default();
         s.apps = AppRules { mode: AppMode::Only, only: vec!["org.telegram.messenger".into()], ..Default::default() };
+        s.sort_by_ping = true;
         s.policy.enabled = true;
         s.policy.set_ssid("Home", "k".into());
         s.save(&path).unwrap();

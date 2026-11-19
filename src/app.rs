@@ -38,7 +38,6 @@ struct App {
     current: Option<usize>,
     /// Row → server index of the shown subscription (sorted by ping or not).
     order: Vec<usize>,
-    sort_by_ping: bool,
     pings: HashMap<String, PingResult>,
     /// Servers being pinged now (a spinner in their row).
     measuring: HashSet<String>,
@@ -199,7 +198,6 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         settings,
         current,
         order: Vec::new(),
-        sort_by_ping: false,
         pings: load_pings(&host),
         measuring: HashSet::new(),
         pinging: false,
@@ -307,7 +305,8 @@ fn wire(ui: &AppWindow) {
     a.on_ping_server(|row| with_app(|app| app.ping_row(row as usize)));
     a.on_toggle_sort(|| {
         with_app(|app| {
-            app.sort_by_ping = !app.sort_by_ping;
+            app.settings.sort_by_ping = !app.settings.sort_by_ping;
+            app.save_settings();
             app.render_servers();
         })
     });
@@ -851,6 +850,7 @@ impl App {
     fn render_servers(&mut self) {
         let Some(ui) = self.ui() else { return };
         let st = ui.global::<AppState>();
+        st.set_sort_by_ping(self.settings.sort_by_ping);
         let Some(sub) = self.sub() else {
             self.order.clear();
             update_model(st.get_servers(), Vec::new(), |m| st.set_servers(m));
@@ -861,7 +861,7 @@ impl App {
         let favorites = &self.store.settings.favorites;
         // Pinned servers first, in the order pinned.
         let pinned = |key: &str| favorites.iter().position(|f| f == key).unwrap_or(usize::MAX);
-        if self.sort_by_ping {
+        if self.settings.sort_by_ping {
             // Then the connected server; unmeasured and failed go last.
             order.sort_by_key(|&i| {
                 let key = servers::key_of(sub, &sub.servers[i]);
@@ -913,7 +913,6 @@ impl App {
         self.order = order;
         update_model(st.get_servers(), rows, |m| st.set_servers(m));
         st.set_has_ping_results(has_pings);
-        st.set_sort_by_ping(self.sort_by_ping);
         st.set_pinging(self.pinging);
     }
 
@@ -940,6 +939,7 @@ impl App {
             Status::Connecting => ("connecting", "Подключение…".into(), self.server_name(server.as_deref())),
             Status::On => ("connected", "Подключено".into(), self.server_name(server.as_deref())),
             // Kill switch: the VPN holds the network closed.
+            Status::Failed(e) if self.conn.tun && self.conn.server.is_none() => ("blocked", "Интернет закрыт".into(), e.clone()),
             Status::Failed(e) if self.conn.tun => ("blocked", "Интернет закрыт".into(), format!("Kill switch, переподключение… {}", e.lines().next().unwrap_or_default())),
             Status::Failed(e) => ("failed", "Ошибка подключения".into(), e.clone()),
         };
@@ -1148,14 +1148,17 @@ impl App {
     /// node yet fails it, so it is asked again every few seconds until known.
     fn trace_exit(&mut self) {
         let Some(link) = self.conn.link.clone() else { return };
-        if self.exit.is_some() || self.traced.is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
+        let interval = if self.exit.is_some() { exit::REFRESH_INTERVAL } else { Duration::from_secs(8) };
+        if self.traced.is_some_and(|t| t.elapsed() < interval) {
             return;
         }
-        self.traced = Some(Instant::now());
+        let started = Instant::now();
+        self.traced = Some(started);
         std::thread::spawn(move || {
             let trace = exit::trace(&link);
             later(move |app| {
                 if app.conn.link.as_ref() == Some(&link)
+                    && app.traced == Some(started)
                     && let Ok(t) = trace
                 {
                     app.exit = Some(t);
@@ -1165,8 +1168,7 @@ impl App {
         });
     }
 
-    /// Once a second while connected: the traffic counters (and the exit
-    /// country until it is known).
+    /// Poll traffic counters and keep the displayed exit country current.
     fn poll(&mut self) {
         self.ticks = self.ticks.wrapping_add(1);
         // Hidden behind the home screen or a locked screen: nothing to show

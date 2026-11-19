@@ -7,7 +7,7 @@
 # --from-github takes the unsigned APKs .github/workflows/release.yml built
 # for <tag>, signs them here, publishes the GitHub release and the hub.
 #
-# Builds one APK per ABI (arm64-v8a, x86_64), signed with the release key,
+# Builds one APK per ABI (arm64-v8a, armeabi-v7a, x86_64), signed with the release key,
 # and adds them as the `android` section of the hub's signed manifest, next
 # to the desktop builds (../DUORAY/packaging/release.sh keeps the section).
 # The manifest is re-signed with the desktop's Ed25519 update key; both keys
@@ -59,7 +59,7 @@ if [ -n "$FROM_TAG" ]; then
     APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
     rm -rf "$OUT" && mkdir -p "$OUT"
     gh release download "$FROM_TAG" -R m-a-prod/DUORAY-Mobile -D "$OUT" -p "*-unsigned.apk"
-    for abi in arm64-v8a x86_64; do
+    for abi in arm64-v8a armeabi-v7a x86_64; do
         "$APKSIGNER" sign --ks "$DUORAY_KEYSTORE" --ks-key-alias duoray --ks-pass env:DUORAY_KEYSTORE_PASSWORD \
             --out "$OUT/DUORAY-$VERSION-$abi.apk" "$OUT/DUORAY-$VERSION-$abi-unsigned.apk"
         "$APKSIGNER" verify "$OUT/DUORAY-$VERSION-$abi.apk"
@@ -71,11 +71,11 @@ if [ "$BUILD" = 1 ]; then
     CODE=$(echo "$VERSION" | awk -F'[.-]' '{ print $1 * 10000 + $2 * 100 + $3 }')
     GRADLE_ARGS="-PversionName=$VERSION -PversionCode=$CODE -PabiSplit=true" scripts/build-apk.sh release
     rm -rf "$OUT" && mkdir -p "$OUT"
-    for abi in arm64-v8a x86_64; do
+    for abi in arm64-v8a armeabi-v7a x86_64; do
         cp "android/app/build/outputs/apk/release/app-$abi-release.apk" "$OUT/DUORAY-$VERSION-$abi.apk"
     done
 fi
-for abi in arm64-v8a x86_64; do
+for abi in arm64-v8a armeabi-v7a x86_64; do
     [ -f "$OUT/DUORAY-$VERSION-$abi.apk" ] || { echo "no $OUT/DUORAY-$VERSION-$abi.apk: build first" >&2; exit 1; }
     # The library must carry exactly the commit the manifest will name: with
     # another id (0.1.8 had "<commit>-dirty") the installed app takes the
@@ -101,7 +101,7 @@ version, notes, out, build = sys.argv[1:5]
 with open(os.path.join(out, "current.json"), encoding="utf-8") as f:
     manifest = json.load(f)
 assets = {}
-for abi in ("arm64-v8a", "x86_64"):
+for abi in ("arm64-v8a", "armeabi-v7a", "x86_64"):
     name = f"DUORAY-{version}-{abi}.apk"
     path = os.path.join(out, name)
     h = hashlib.sha256()
@@ -140,7 +140,7 @@ if [ -n "$FROM_TAG" ]; then
     # The signed APKs replace the unsigned ones; the draft goes public.
     (cd "$OUT" && sha256sum DUORAY-"$VERSION"-*.apk > SHA256SUMS)
     gh release upload "$FROM_TAG" -R m-a-prod/DUORAY-Mobile "$OUT"/DUORAY-"$VERSION"-*.apk "$OUT/SHA256SUMS" --clobber
-    for abi in arm64-v8a x86_64; do
+    for abi in arm64-v8a armeabi-v7a x86_64; do
         gh release delete-asset "$FROM_TAG" "DUORAY-$VERSION-$abi-unsigned.apk" -R m-a-prod/DUORAY-Mobile -y 2>/dev/null || true
     done
     if [ -n "$NOTES" ]; then

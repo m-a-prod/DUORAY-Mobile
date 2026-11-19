@@ -17,6 +17,11 @@ pub fn find<'a>(store: &'a Store, key: &str) -> Option<(&'a Subscription, &'a Se
         .or_else(|| moved(store, key))
 }
 
+/// Resolve the requested server against the same store used for the config.
+pub fn for_connection<'a>(store: &'a Store, requested: &str) -> Option<(&'a Subscription, &'a Server)> {
+    find(store, requested).or_else(|| find(store, store.settings.last_server.as_deref()?))
+}
+
 /// The server `key` was made for after the panel changed its address (a
 /// bridge moved to a new IP) or its name: the only server of the same
 /// subscription with that name, else the only one at that address.
@@ -265,6 +270,11 @@ mod tests {
         assert_eq!(find(&store, &keys[1]).map(|(_, s)| s.name.as_str()), Some("Финляндия #1"));
         assert!(find(&store, &keys[2]).is_none(), "two servers at that address: no guess");
         assert!(find(&store, "other\u{1f}Мост\u{1f}192.0.2.1:443").is_none(), "only within its subscription");
+        assert!(for_connection(&store, &keys[2]).is_none());
+        let mut store = store;
+        store.settings.last_server = Some(keys[1].clone());
+        assert_eq!(for_connection(&store, &keys[2]).unwrap().1.name, "Финляндия #1");
+        assert_eq!(for_connection(&store, &keys[0]).unwrap().1.name, "Мост");
         let moved = moved_keys(&store, &keys);
         assert_eq!(moved.len(), 2);
         assert_eq!(moved[&keys[0]], key_of(&store.subscriptions[0], &store.subscriptions[0].servers[0]));

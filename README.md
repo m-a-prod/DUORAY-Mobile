@@ -71,7 +71,7 @@
 ## Установка
 
 APK — в [Releases](https://github.com/m-a-prod/DUORAY-Mobile/releases/latest) и на
-[duoray.pro](https://duoray.pro). Почти всем телефонам подходит `arm64-v8a`; `x86_64` —
+[duoray.pro](https://duoray.pro). Почти всем телефонам подходит `arm64-v8a`, для 32-битного ARM на Android 8 и новее выбирайте `armeabi-v7a`; `x86_64` —
 для эмуляторов и редких планшетов. При первой установке Android попросит разрешить
 установку из браузера или файлового менеджера, при первом подключении — VPN.
 Дальше приложение обновляется само.
@@ -109,13 +109,13 @@ NetworkWatcher                  ──►  Native.networkChanged → серве�
 ## Сборка из исходников
 
 Рядом должен лежать репозиторий [DUORAY](https://github.com/m-a-prod/DUORAY): из него
-берётся `duoray-core`.
+берётся `duoray-core`. Для ARMv7 нужен также Go: скрипт собирает Xray из исходников того же тега с помощью Android NDK.
 
 ```sh
 git clone https://github.com/m-a-prod/DUORAY.git
 git clone https://github.com/m-a-prod/DUORAY-Mobile.git
 cd DUORAY-Mobile
-rustup target add aarch64-linux-android x86_64-linux-android
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 cargo install cargo-ndk
 export ANDROID_HOME=~/Android/Sdk ANDROID_NDK_HOME=~/Android/Sdk/ndk/<версия>
 scripts/build-apk.sh debug        # или release

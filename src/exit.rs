@@ -15,6 +15,8 @@ use crate::grpc;
 
 const TRACE_URL: &str = "https://1.1.1.1/cdn-cgi/trace";
 
+pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Cloudflare's view of the connection.
 pub fn trace(link: &Link) -> Result<Trace> {
     let proxy = ureq::Proxy::new(&format!("socks5://{}:{}@{}", link.user, link.pass, link.socks))?;
