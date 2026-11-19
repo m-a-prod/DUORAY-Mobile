@@ -29,6 +29,12 @@ for abi in $ABIS; do
         if [ "$abi" = armeabi-v7a ]; then
             # Skia is built from source for this ABI. Its unversioned target
             # triple is rejected by newer NDK headers.
+            # Use the parser shipped with the NDK for its C++ headers.
+            for lib in "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/lib/libclang.so; do
+                if [ -f "$lib" ]; then
+                    export LIBCLANG_PATH="$lib"
+                fi
+            done
             export SKIA_GN_ARGS='extra_cflags+=["--target=armv7-linux-androideabi26"]'
             export CXXFLAGS_armv7_linux_androideabi="--target=armv7-linux-androideabi26"
             set -- env "BINDGEN_EXTRA_CLANG_ARGS_armv7-linux-androideabi=--target=armv7-linux-androideabi26 -D__ANDROID_MIN_SDK_VERSION__=26"
