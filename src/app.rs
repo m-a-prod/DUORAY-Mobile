@@ -871,6 +871,7 @@ impl App {
         st.set_sub_error(sub.last_error.as_deref().map(servers::humanize).unwrap_or_default().into());
         st.set_busy(self.refreshing.contains(&sub.id));
         st.set_sub_hours(self.settings.subscription_hours.get(&sub.id).map_or(-1, |h| *h as i32));
+        st.set_sub_panel_hours((servers::update_interval_secs(sub, None) / 3600) as i32);
         st.set_sub_id_mode(match sub.identity.mode {
             SubIdentityMode::Settings => 0,
             SubIdentityMode::Duoray => 1,

@@ -234,6 +234,7 @@ export global AppState {
     in property <int> happ-os;
     // The shown subscription's own identity: 0 as in settings, 1 DUORAY, 2 Happ.
     in property <int> sub-hours;
+    in property <int> sub-panel-hours: 12;
     in property <int> sub-id-mode;
     in property <string> sub-hwid;
     in property <string> sub-happ-ua;
@@ -3183,12 +3184,58 @@ component ConfirmSheet inherits Rectangle {
     }
 }
 
+// One action row in SubMenuSheet, with optional value badge and chevron.
+component SubMenuRow inherits Rectangle {
+    in property <string> text;
+    in property <string> value;
+    in property <bool> chevron;
+    in property <bool> danger;
+    callback clicked();
+    height: 52px;
+    border-radius: 12px;
+    background: row-touch.pressed ? Theme.fg.with-alpha(0.08) : transparent;
+    animate background { duration: 120ms; }
+    row-touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 14px;
+        spacing: 8px;
+        Text {
+            text: root.text;
+            font-size: Theme.fs-body;
+            font-weight: 500;
+            color: root.danger ? Theme.danger : Theme.fg;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        if root.value != "": Text {
+            text: root.value;
+            font-size: Theme.fs-small;
+            color: Theme.muted;
+            vertical-alignment: center;
+        }
+        if root.chevron: Image {
+            source: Icons.chevron;
+            width: 16px;
+            height: 16px;
+            colorize: Theme.muted;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+}
+
 // A bottom sheet of actions for the shown subscription (the desktop's ⋯ menu).
 component SubMenuSheet inherits Rectangle {
     in property <length> bottom-inset;
     callback close();
     callback remove();
     callback identity();
+    callback auto-refresh();
     background: Theme.shadow;
     TouchArea {
         clicked => {
@@ -3211,7 +3258,8 @@ component SubMenuSheet inherits Rectangle {
             // Grab handle.
             HorizontalLayout {
                 alignment: center;
-                padding-bottom: 6px;
+                padding-top: 2px;
+                padding-bottom: 8px;
                 Rectangle {
                     width: 36px;
                     height: 4px;
@@ -3221,7 +3269,8 @@ component SubMenuSheet inherits Rectangle {
             }
             HorizontalLayout {
                 padding-left: 16px;
-                padding-bottom: 6px;
+                padding-right: 16px;
+                padding-bottom: 8px;
                 Text {
                     text: AppState.header-title;
                     font-size: Theme.fs-title;
@@ -3229,53 +3278,65 @@ component SubMenuSheet inherits Rectangle {
                     overflow: elide;
                 }
             }
-            Text {
-                text: "Автообновление подписки";
-                font-size: Theme.fs-body;
-                color: Theme.fg;
+            SubMenuRow {
+                text: "Подключиться к самому быстрому";
+                clicked => {
+                    root.close();
+                    Actions.connect-fastest();
+                }
+            }
+            if AppState.show-usage-row: SubMenuRow {
+                text: "Автообновление";
+                value: AppState.sub-hours < 0 ? "По умолчанию · " + AppState.sub-panel-hours + " ч"
+                    : AppState.sub-hours == 0 ? "Выкл."
+                    : AppState.sub-hours + " ч";
+                chevron: true;
+                clicked => {
+                    root.close();
+                    root.auto-refresh();
+                }
+            }
+            SubMenuRow {
+                text: "Скопировать ссылку";
+                clicked => {
+                    root.close();
+                    Actions.copy-link();
+                }
+            }
+            SubMenuRow {
+                text: "QR-код";
+                clicked => {
+                    root.close();
+                    Actions.show-qr();
+                }
+            }
+            SubMenuRow {
+                text: "Подмена HWID";
+                value: AppState.sub-id-mode == 1 ? "DUORAY"
+                    : AppState.sub-id-mode == 2 ? "Happ"
+                    : "";
+                chevron: true;
+                clicked => {
+                    root.close();
+                    root.identity();
+                }
             }
             HorizontalLayout {
-                for label[i] in ["Панель", "1 ч", "6 ч", "12 ч", "24 ч", "Выкл."]: Segment {
-                    property <int> hours: i == 0 ? -1 : i == 1 ? 1 : i == 2 ? 6 : i == 3 ? 12 : i == 4 ? 24 : 0;
-                    text: label;
-                    active: AppState.sub-hours == self.hours;
-                    clicked => { Actions.set-sub-hours(self.hours); }
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.outline;
                 }
             }
-            for item[i] in [
-                { text: "Подключиться к самому быстрому", danger: false },
-                { text: "Скопировать ссылку", danger: false },
-                { text: "QR-код", danger: false },
-                { text: "Подмена HWID", danger: false },
-                { text: "Удалить подписку", danger: true },
-            ]: Rectangle {
-                height: 52px;
-                border-radius: 12px;
-                background: item-touch.pressed ? Theme.fg.with-alpha(0.08) : transparent;
-                item-touch := TouchArea {
-                    clicked => {
-                        root.close();
-                        if (i == 0) {
-                            Actions.connect-fastest();
-                        } else if (i == 1) {
-                            Actions.copy-link();
-                        } else if (i == 2) {
-                            Actions.show-qr();
-                        } else if (i == 3) {
-                            root.identity();
-                        } else {
-                            root.remove();
-                        }
-                    }
-                }
-                HorizontalLayout {
-                    padding-left: 16px;
-                    Text {
-                        text: item.text;
-                        font-size: Theme.fs-body;
-                        color: item.danger ? Theme.danger : Theme.fg;
-                        vertical-alignment: center;
-                    }
+            SubMenuRow {
+                text: "Удалить подписку";
+                danger: true;
+                clicked => {
+                    root.close();
+                    root.remove();
                 }
             }
         }
@@ -3375,6 +3436,130 @@ component ServerPage inherits Rectangle {
                     primary: true;
                     clicked => {
                         Actions.save-server(json.text);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One choice tile inside a bottom sheet (48dp height, 8dp gaps).
+component ChoiceTile inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    height: 48px;
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    border-radius: 12px;
+    border-width: root.active ? 1.5px : 1px;
+    border-color: root.active ? Theme.accent : Theme.outline;
+    background: root.active ? Theme.tonal : tile-touch.pressed ? Theme.fg.with-alpha(0.08) : Theme.bg;
+    animate background { duration: 150ms; }
+    animate border-color { duration: 150ms; }
+    Text {
+        x: 6px;
+        width: parent.width - 12px;
+        height: parent.height;
+        text: root.text;
+        font-size: Theme.fs-small;
+        font-weight: root.active ? 700 : 500;
+        color: root.active ? Theme.on-tonal : Theme.fg;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    tile-touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// "Автообновление": background refresh interval for the shown subscription.
+component AutoRefreshSheet inherits Rectangle {
+    in property <length> bottom-inset;
+    callback close();
+    background: Theme.shadow;
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+    Rectangle {
+        x: Theme.dialog-x(parent.width, 0px);
+        width: parent.width - 2 * self.x;
+        y: parent.height - self.height;
+        height: box.preferred-height;
+        background: Theme.card;
+        border-radius: 22px;
+        border-width: 1px;
+        border-color: Theme.outline;
+        TouchArea { }
+        box := VerticalLayout {
+            padding: 16px;
+            padding-top: 10px;
+            padding-bottom: max(root.bottom-inset, 12px) + 14px;
+            spacing: 12px;
+            HorizontalLayout {
+                alignment: center;
+                padding-bottom: 2px;
+                Rectangle {
+                    width: 36px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.line;
+                }
+            }
+            Text {
+                text: "Автообновление · " + AppState.header-title;
+                font-size: Theme.fs-title;
+                font-weight: 700;
+                overflow: elide;
+            }
+            Text {
+                text: AppState.sub-hours < 0
+                    ? "По умолчанию (" + AppState.sub-panel-hours + " ч) — интервал из подписки. Обновляется автоматически, в том числе в фоне."
+                    : AppState.sub-hours == 0
+                    ? "Автообновление отключено. Серверы обновляются только вручную."
+                    : "Подписка обновляется каждые " + AppState.sub-hours + " ч, в том числе в фоне.";
+                font-size: Theme.fs-caption;
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    ChoiceTile {
+                        text: "По умолчанию · " + AppState.sub-panel-hours + " ч";
+                        active: AppState.sub-hours < 0;
+                        clicked => {
+                            Actions.set-sub-hours(-1);
+                        }
+                    }
+                    ChoiceTile {
+                        text: "Выкл.";
+                        active: AppState.sub-hours == 0;
+                        clicked => {
+                            Actions.set-sub-hours(0);
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    for opt in [
+                        { label: "1 ч", hours: 1 },
+                        { label: "6 ч", hours: 6 },
+                        { label: "12 ч", hours: 12 },
+                        { label: "24 ч", hours: 24 },
+                    ]: ChoiceTile {
+                        text: opt.label;
+                        active: AppState.sub-hours == opt.hours;
+                        clicked => {
+                            Actions.set-sub-hours(opt.hours);
+                        }
                     }
                 }
             }
@@ -3824,12 +4009,13 @@ export component AppWindow inherits Window {
     in-out property <int> picking: -1;
     in-out property <bool> confirm-remove;
     in-out property <bool> sub-menu;
+    in-out property <bool> refresh-open;
     in-out property <bool> identity-open;
     in-out property <bool> qr-open;
     in-out property <bool> server-open;
     // Something Back closes (mirrors the key handler below); at the top level
     // Back belongs to the system, which then plays its predictive animation.
-    out property <bool> can-go-back: AppState.consent-open || AppState.report-open || root.qr-open || root.identity-open
+    out property <bool> can-go-back: AppState.consent-open || AppState.report-open || root.qr-open || root.identity-open || root.refresh-open
         || root.sub-menu || root.adding || root.picking >= 0 || root.confirm-remove || root.server-open || root.apps-open
         || root.cores-open
         || root.page != 0;
@@ -3879,6 +4065,8 @@ export component AppWindow inherits Window {
             root.qr-open = false;
         } else if (root.identity-open) {
             root.identity-open = false;
+        } else if (root.refresh-open) {
+            root.refresh-open = false;
         } else if (root.sub-menu) {
             root.sub-menu = false;
         } else if (root.adding) {
@@ -4231,6 +4419,9 @@ export component AppWindow inherits Window {
         identity => {
             root.identity-open = true;
         }
+        auto-refresh => {
+            root.refresh-open = true;
+        }
     }
     if root.qr-open: Rectangle {
         background: Theme.shadow;
@@ -4271,6 +4462,12 @@ export component AppWindow inherits Window {
                     wrap: word-wrap;
                 }
             }
+        }
+    }
+    if root.refresh-open: AutoRefreshSheet {
+        bottom-inset: root.bottom;
+        close => {
+            root.refresh-open = false;
         }
     }
     if root.identity-open: IdentitySheet {
