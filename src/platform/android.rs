@@ -421,3 +421,15 @@ pub extern "system" fn Java_space_dualizm_duoray_Native_localNetwork<'a>(mut env
     })
     .resolve::<ThrowRuntimeExAndDefault>()
 }
+
+static SUBSCRIPTION_JOB: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_subscriptionJobToken(_env: EnvUnowned, _class: JClass, token: jint) {
+    SUBSCRIPTION_JOB.store(token, std::sync::atomic::Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_space_dualizm_duoray_Native_refreshSubscriptions(_env: EnvUnowned, _class: JClass, token: jint) -> jboolean {
+    crate::app::background_refresh(|| SUBSCRIPTION_JOB.load(std::sync::atomic::Ordering::Acquire) == token).is_ok()
+}

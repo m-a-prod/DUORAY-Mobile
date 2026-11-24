@@ -24,6 +24,9 @@ use crate::service::{self, Host, Snapshot, Status};
 use crate::settings::{AppMode, MobileSettings};
 use crate::{Actions, AppRow, AppState, AppWindow, ServerRow, SsidRow, SubItem, flags, ping, servers, themes, tunnel};
 
+pub(crate) mod subscriptions;
+#[cfg(target_os = "android")]
+pub use subscriptions::background_refresh;
 mod cores;
 mod support;
 
@@ -65,6 +68,7 @@ struct App {
     refreshing: HashSet<String>,
     /// When each subscription was last updated without being asked (unix
     /// seconds): one that fails is not asked for again at once.
+    background_changed: bool,
     refresh_tried: HashMap<String, u64>,
     /// The network the pings were measured on (pings-net next to pings.json).
     pings_net: Option<NetKind>,
@@ -172,15 +176,41 @@ pub fn adopt_selection(key: String) {
     });
 }
 
+fn load_mobile_store(path: &std::path::Path) -> anyhow::Result<Store> {
+    let first_run = !path.try_exists()?;
+    let mut store = Store::load(path)?;
+    if first_run {
+        store.settings.ping.proxy_mode = ProxyPingMode::KeepAlive;
+        store.save(path)?;
+    }
+    Ok(store)
+}
+
+#[cfg(test)]
+#[test]
+fn keepalive_is_the_default_only_for_new_stores() {
+    let dir = std::env::temp_dir().join(format!("duoray-first-ping-{}", fastrand::u64(..)));
+    let path = dir.join("store.json");
+    let mut store = load_mobile_store(&path).unwrap();
+    assert_eq!(store.settings.ping.proxy_mode, ProxyPingMode::KeepAlive);
+    store.settings.ping.proxy_mode = ProxyPingMode::Default;
+    store.save(&path).unwrap();
+    assert_eq!(load_mobile_store(&path).unwrap().settings.ping.proxy_mode, ProxyPingMode::Default);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Shows the window until the platform closes it. `setup` runs once the
 /// window is built (the preview uses it for screenshots).
 pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
     let host = service::host().ok_or_else(|| slint::PlatformError::Other("service::init was not called".into()))?;
     let ui = AppWindow::new()?;
-    let store = Store::load(&host.store()).unwrap_or_else(|e| {
+    let mut updates = subscriptions::pending();
+    let store = load_mobile_store(&host.store()).unwrap_or_else(|e| {
         log::error!("store.json: {e:#}");
         Store::default()
     });
+    updates.clear();
+    drop(updates);
     let settings = MobileSettings::load(&host.settings());
     let current = store
         .settings
@@ -212,6 +242,7 @@ pub fn run(setup: impl FnOnce(&AppWindow)) -> Result<(), slint::PlatformError> {
         ping_cancel: None,
         render_pending: false,
         refreshing: HashSet::new(),
+        background_changed: false,
         refresh_tried: HashMap::new(),
         pings_net: load_pings_net(&host),
         conn: service::snapshot(),
@@ -561,6 +592,17 @@ fn wire(ui: &AppWindow) {
     a.on_set_happ_os(|i| with_app(|app| app.edit_settings(|s| s.happ.os = HAPP_OS[(i as usize).min(3)].into())));
     a.on_happ_new_ids(|| with_app(|app| app.edit_settings(|s| s.happ.randomize_ids())));
     a.on_happ_new_device(|| with_app(|app| app.edit_settings(|s| s.happ.randomize_device())));
+    a.on_set_sub_hours(|hours| with_app(|app| {
+        let Some(id) = app.sub().map(|s| s.id.clone()) else { return };
+        if hours < 0 {
+            app.settings.subscription_hours.remove(&id);
+        } else {
+            app.settings.subscription_hours.insert(id.clone(), hours as u32);
+        }
+        app.save_settings();
+        app.render_header();
+        app.refresh_stale();
+    }));
     a.on_set_sub_id_mode(|m| {
         with_app(|app| {
             let global = app.store.settings.happ.clone();
@@ -711,6 +753,8 @@ impl App {
     }
 
     fn save_store(&mut self) {
+        let mut updates = subscriptions::pending();
+        self.background_changed |= subscriptions::merge(&mut self.store, &mut updates);
         // Pins, the theme and the last server show in the home screen widgets.
         crate::widgets::write(&self.host.data, &self.store);
         if let Err(e) = self.store.save(&self.host.store()) {
@@ -815,7 +859,7 @@ impl App {
         st.set_term_until(until.into());
         st.set_term_state(term.code());
         st.set_header_title(sub.display_name().into());
-        st.set_header_meta(servers::header_meta(sub).into());
+        st.set_header_meta(servers::header_meta(sub, self.settings.subscription_hours.get(&sub.id).copied()).into());
         st.set_header_short(servers::header_short(sub).into());
         st.set_show_usage_row(!sub.is_manual());
         st.set_usage_text(usage_text.into());
@@ -826,6 +870,7 @@ impl App {
         st.set_has_support(sub.info.support_url.is_some());
         st.set_sub_error(sub.last_error.as_deref().map(servers::humanize).unwrap_or_default().into());
         st.set_busy(self.refreshing.contains(&sub.id));
+        st.set_sub_hours(self.settings.subscription_hours.get(&sub.id).map_or(-1, |h| *h as i32));
         st.set_sub_id_mode(match sub.identity.mode {
             SubIdentityMode::Settings => 0,
             SubIdentityMode::Duoray => 1,
@@ -1170,6 +1215,12 @@ impl App {
 
     /// Poll traffic counters and keep the displayed exit country current.
     fn poll(&mut self) {
+        let changed = subscriptions::merge(&mut self.store, &mut subscriptions::pending());
+        if changed || std::mem::take(&mut self.background_changed) {
+            self.follow_moved();
+            self.forget_dead_rules();
+            self.render_all();
+        }
         self.ticks = self.ticks.wrapping_add(1);
         // Hidden behind the home screen or a locked screen: nothing to show
         // (the shade is the background poller's). Only «Держать подключение»
@@ -1647,12 +1698,7 @@ impl App {
         self.render_header();
         self.render_status();
         std::thread::spawn(move || {
-            let direct = || subscription::fetch(&url, fallback.as_deref(), &headers);
-            let result = match proxy.as_deref() {
-                Some(proxy) => subscription::fetch_with_proxy(&url, fallback.as_deref(), &headers, Some(proxy)).or_else(|_| direct()),
-                None => direct(),
-            }
-            .map_err(|e| format!("{e:#}"));
+            let result = subscriptions::fetch(&url, fallback.as_deref(), &headers, proxy.as_deref());
             later(move |app| {
                 app.refreshing.remove(&id);
                 if let Err(e) = &result {
@@ -1671,7 +1717,7 @@ impl App {
     /// waits a while before the next try).
     fn refresh_stale(&mut self) {
         let now = store::now();
-        for id in servers::due_for_update(&self.store.subscriptions, &self.refresh_tried, now) {
+        for id in servers::due_for_update(&self.store.subscriptions, &self.refresh_tried, &self.settings.subscription_hours, now) {
             self.refresh_tried.insert(id.clone(), now);
             self.refresh(id);
         }
@@ -1862,6 +1908,8 @@ impl App {
     fn remove_current(&mut self) {
         let Some(id) = self.sub().filter(|s| !s.is_manual()).map(|s| s.id.clone()) else { return };
         self.store.remove(&id);
+        self.settings.subscription_hours.remove(&id);
+        self.save_settings();
         if self.store.settings.last_server.as_deref().is_some_and(|k| servers::find(&self.store, k).is_none()) {
             self.store.settings.last_server = None;
         }

@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Android shows Wi-Fi names only to apps with location access. -->
@@ -38,6 +39,7 @@
         android:theme="@style/Theme.Duoray"
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true">
+        <service android:name=".SubscriptionJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!-- The whole UI is Rust (Slint) inside this NativeActivity. -->
         <activity

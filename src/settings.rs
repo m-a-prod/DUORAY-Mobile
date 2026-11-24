@@ -11,6 +11,8 @@ use crate::netpolicy::NetworkPolicy;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MobileSettings {
+    /// Missing entry uses the panel interval; zero disables automatic refresh.
+    pub subscription_hours: std::collections::HashMap<String, u32>,
     pub sort_by_ping: bool,
     pub policy: NetworkPolicy,
     pub apps: AppRules,
@@ -161,6 +163,7 @@ impl Default for MobileSettings {
             connect_off_wifi: false,
             disconnect_on_wifi: false,
             keep_connected: false,
+            subscription_hours: Default::default(),
             sort_by_ping: false,
             live_ping: true,
             kill_switch: false,

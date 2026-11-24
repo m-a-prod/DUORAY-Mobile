@@ -85,6 +85,9 @@ object Native {
         }
     }
 
+    @JvmStatic external fun subscriptionJobToken(token: Int)
+    @JvmStatic external fun refreshSubscriptions(token: Int): Boolean
+
     @JvmStatic external fun init(filesDir: String, nativeLibraryDir: String, deviceId: String, osVersion: String, model: String)
 
     /** The TUN is open; false when Rust has nothing to run on it. */

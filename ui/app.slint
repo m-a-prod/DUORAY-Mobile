@@ -233,6 +233,7 @@ export global AppState {
     // 0 Android, 1 iOS, 2 Windows, 3 macOS.
     in property <int> happ-os;
     // The shown subscription's own identity: 0 as in settings, 1 DUORAY, 2 Happ.
+    in property <int> sub-hours;
     in property <int> sub-id-mode;
     in property <string> sub-hwid;
     in property <string> sub-happ-ua;
@@ -373,6 +374,7 @@ export global Actions {
     callback set-happ-os(int);
     callback happ-new-ids();
     callback happ-new-device();
+    callback set-sub-hours(int);
     callback set-sub-id-mode(int);
     callback set-sub-hwid(string);
     callback sub-random-hwid();
@@ -3225,6 +3227,19 @@ component SubMenuSheet inherits Rectangle {
                     font-size: Theme.fs-title;
                     font-weight: 700;
                     overflow: elide;
+                }
+            }
+            Text {
+                text: "Автообновление подписки";
+                font-size: Theme.fs-body;
+                color: Theme.fg;
+            }
+            HorizontalLayout {
+                for label[i] in ["Панель", "1 ч", "6 ч", "12 ч", "24 ч", "Выкл."]: Segment {
+                    property <int> hours: i == 0 ? -1 : i == 1 ? 1 : i == 2 ? 6 : i == 3 ? 12 : i == 4 ? 24 : 0;
+                    text: label;
+                    active: AppState.sub-hours == self.hours;
+                    clicked => { Actions.set-sub-hours(self.hours); }
                 }
             }
             for item[i] in [

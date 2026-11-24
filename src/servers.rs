@@ -52,13 +52,16 @@ pub fn name(key: &str, store: &Store) -> Option<String> {
 }
 
 /// The header line, as on the desktop: "29.10.2026 00:31 · Автообновление — 12 ч · 62 сервера".
-pub fn header_meta(sub: &Subscription) -> String {
+pub fn header_meta(sub: &Subscription, hours: Option<u32>) -> String {
     let servers = plural(sub.servers.len(), "сервер", "сервера", "серверов");
     if sub.is_manual() {
         return format!("{servers} · добавлены вручную");
     }
     let mut parts = vec![sub.updated_at.map_or_else(|| "ещё не обновлялась".into(), local_time)];
-    parts.push(format!("Автообновление — {} ч", update_interval_secs(sub) / 3600));
+    parts.push(match hours {
+        Some(0) => "Автообновление выключено".into(),
+        _ => format!("Автообновление — {} ч", update_interval_secs(sub, hours) / 3600),
+    });
     parts.push(servers);
     if sub.skipped > 0 {
         parts.push(format!("пропущено {}", sub.skipped));
@@ -164,8 +167,8 @@ pub fn term(sub: &Subscription, now: u64) -> Option<(String, String, Term)> {
 }
 
 /// The panel's `profile-update-interval`, or 12 h.
-pub fn update_interval_secs(sub: &Subscription) -> u64 {
-    u64::from(sub.info.update_interval_hours.filter(|h| *h > 0).unwrap_or(12)) * 3600
+pub fn update_interval_secs(sub: &Subscription, hours: Option<u32>) -> u64 {
+    u64::from(hours.or(sub.info.update_interval_hours.filter(|h| *h > 0)).unwrap_or(12)) * 3600
 }
 
 /// An update that failed is not asked for again sooner than this.
@@ -175,9 +178,10 @@ const UPDATE_RETRY: u64 = 10 * 60;
 /// interval has passed since the last update, and the last try (`tried`,
 /// unix seconds by id) is not a moment ago: a failed one keeps its old time
 /// of update and would be fetched in a loop.
-pub fn due_for_update(subs: &[Subscription], tried: &std::collections::HashMap<String, u64>, now: u64) -> Vec<String> {
+pub fn due_for_update(subs: &[Subscription], tried: &std::collections::HashMap<String, u64>, hours: &std::collections::HashMap<String, u32>, now: u64) -> Vec<String> {
     subs.iter()
-        .filter(|s| !s.is_manual() && s.updated_at.is_none_or(|t| now.saturating_sub(t) >= update_interval_secs(s)))
+        .filter(|s| !s.is_manual() && hours.get(&s.id) != Some(&0))
+        .filter(|s| s.updated_at.is_none_or(|t| now.saturating_sub(t) >= update_interval_secs(s, hours.get(&s.id).copied())))
         .filter(|s| tried.get(&s.id).is_none_or(|t| now.saturating_sub(*t) >= UPDATE_RETRY))
         .map(|s| s.id.clone())
         .collect()
@@ -328,12 +332,14 @@ mod tests {
         };
         let subs = [sub("hourly", Some(now - 3700), Some(1)), sub("fresh", Some(now - 600), Some(1)), sub("new", None, None), sub("daily", Some(now - 3700), None)];
         let mut tried = std::collections::HashMap::new();
-        assert_eq!(due_for_update(&subs, &tried, now), ["hourly", "new"]);
+        assert_eq!(due_for_update(&subs, &tried, &Default::default(), now), ["hourly", "new"]);
+        let hours = [("hourly".into(), 0), ("daily".into(), 1)].into();
+        assert_eq!(due_for_update(&subs, &tried, &hours, now), ["new", "daily"]);
         // The hourly one failed just now: its time of update did not move.
         tried.insert("hourly".to_string(), now - 60);
-        assert_eq!(due_for_update(&subs, &tried, now), ["new"]);
+        assert_eq!(due_for_update(&subs, &tried, &Default::default(), now), ["new"]);
         tried.insert("hourly".to_string(), now - UPDATE_RETRY);
-        assert_eq!(due_for_update(&subs, &tried, now), ["hourly", "new"]);
+        assert_eq!(due_for_update(&subs, &tried, &Default::default(), now), ["hourly", "new"]);
     }
 
     #[test]

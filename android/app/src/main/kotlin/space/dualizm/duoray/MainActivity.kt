@@ -35,6 +35,7 @@ class MainActivity : NativeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Native.boot(this)
+        SubscriptionJob.schedule(this)
         NetworkWatcher.start(applicationContext)
         super.onCreate(savedInstanceState)
         preferHighRefreshRate()
